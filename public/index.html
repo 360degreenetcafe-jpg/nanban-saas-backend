@@ -5737,6 +5737,30 @@
             console.warn("nanbanQueueWaJob_", e);
         }
     }
+
+    /** Same payload as loadDatabaseLegacy RPC path — used when GET /v1/snapshot fails or returns empty. */
+    async function nanbanHydrateFromRpc_() {
+        let res = await apiCall_('getDatabaseData');
+        if (res && res.status === 'success') {
+            studentsData = res.students || [];
+            ensureStudentFeesResolved_(studentsData);
+            expensesData = res.expenses || [];
+            nanbanLastSyncAt = Date.now();
+            localStorage.setItem('nanban_db_cache', JSON.stringify({ students: studentsData, expenses: expensesData }));
+            try {
+                let chitRes = await apiCall_('getChitData');
+                if (chitRes && chitRes.status === 'success') {
+                    chitData = chitRes.data;
+                    localStorage.setItem('nanban_chit_cache', JSON.stringify(chitData));
+                }
+            } catch (chitErr) {
+                console.warn('getChitData failed:', chitErr);
+            }
+            return true;
+        }
+        return false;
+    }
+
     function saveNanbanNativeSettings() {}
     function loadNanbanNativeSettingsToForm() {}
 
@@ -6341,18 +6365,32 @@
                     try {
                         showLoader("Firebase sync...");
                         let j = await nanbanFetchSnapshot_();
-                        if (j && j.ok) {
+                        let snapOk = !!(j && j.ok);
+                        if (snapOk) {
                             studentsData = Array.isArray(j.students) ? j.students : [];
                             ensureStudentFeesResolved_(studentsData);
                             expensesData = Array.isArray(j.expenses) ? j.expenses : [];
                             if (j.appSettings) appSettings = j.appSettings;
-                            if (j.chitData && j.chitData.groups) chitData = j.chitData;
+                            if (j.chitData && typeof j.chitData === 'object') {
+                                chitData = Object.assign(
+                                    { groups: [], members: [], auctions: [], payments: [], bids: [] },
+                                    j.chitData
+                                );
+                            }
                             nanbanLastSyncAt = Date.now();
                             localStorage.setItem('nanban_db_cache', JSON.stringify({ students: studentsData, expenses: expensesData }));
                             localStorage.setItem('nanban_chit_cache', JSON.stringify(chitData));
                         }
+                        if (!snapOk || (studentsData.length === 0 && expensesData.length === 0)) {
+                            await nanbanHydrateFromRpc_();
+                        }
                     } catch (e) {
                         console.warn("nanbanFetchSnapshot_", e);
+                        try {
+                            await nanbanHydrateFromRpc_();
+                        } catch (e2) {
+                            console.warn("nanbanHydrateFromRpc_", e2);
+                        }
                     }
                     hideLoader();
                     try { loadNanbanNativeSettingsToForm(); } catch (e2) {}

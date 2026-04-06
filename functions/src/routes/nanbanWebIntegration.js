@@ -3,6 +3,7 @@ const admin = require("firebase-admin");
 const { info, warn } = require("../lib/logger");
 const { inferJobKindFromStudent } = require("../services/waNativeJobProcessor");
 const { handleErpRpc } = require("../services/erpRpcDispatch");
+const { getBusinessSnapshotDoc } = require("../services/snapshotStore");
 
 const MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024;
 
@@ -51,13 +52,7 @@ function createNanbanWebIntegrationApp({ getWriteKey }) {
     if (!auth(req, res)) return;
     const business = String(req.query.business || "Nanban").trim() || "Nanban";
     try {
-      const db = admin.firestore();
-      const snap = await db.collection("businesses").doc(business).collection("snapshot").doc("main").get();
-      if (!snap.exists) {
-        res.json({ ok: true, students: [], expenses: [], appSettings: null, chitData: null });
-        return;
-      }
-      const data = snap.data() || {};
+      const data = await getBusinessSnapshotDoc(business);
       res.json({
         ok: true,
         students: Array.isArray(data.students) ? data.students : [],

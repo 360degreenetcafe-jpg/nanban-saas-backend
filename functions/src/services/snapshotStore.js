@@ -1,11 +1,80 @@
 const admin = require("firebase-admin");
 
+/**
+ * Firestore sometimes stores sheet-style rows as JSON strings or map objects.
+ * The hosted UI expects real arrays for students / expenses / E‑Sevai lists.
+ */
+function coerceFirestoreArray(v) {
+  if (Array.isArray(v)) return v;
+  if (v === undefined || v === null) return [];
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (!s) return [];
+    try {
+      const p = JSON.parse(s);
+      return Array.isArray(p) ? p : [];
+    } catch (_) {
+      return [];
+    }
+  }
+  if (typeof v === "object") {
+    const keys = Object.keys(v);
+    if (keys.length && keys.every((k) => /^\d+$/.test(k))) {
+      return keys.sort((a, b) => Number(a) - Number(b)).map((k) => v[k]);
+    }
+  }
+  return [];
+}
+
+function coerceChitData(raw) {
+  if (typeof raw === "string") {
+    try {
+      const p = JSON.parse(raw);
+      return coerceChitData(p);
+    } catch (_) {
+      return { groups: [], members: [], auctions: [], payments: [], bids: [], schedule: [] };
+    }
+  }
+  const base = raw && typeof raw === "object" && !Array.isArray(raw) ? { ...raw } : {};
+  for (const k of ["groups", "members", "auctions", "payments", "bids", "schedule"]) {
+    base[k] = coerceFirestoreArray(base[k] !== undefined ? base[k] : []);
+  }
+  return base;
+}
+
+function normalizeSnapshotDocForRead(businessName, raw) {
+  const id = String(businessName || "Nanban").trim() || "Nanban";
+  const data = raw && typeof raw === "object" ? { ...raw } : {};
+  if (id === "ESevai") {
+    for (const k of [
+      "services",
+      "customers",
+      "agents",
+      "ledgerEntries",
+      "enquiries",
+      "works",
+      "transactions",
+      "reminders"
+    ]) {
+      data[k] = coerceFirestoreArray(data[k]);
+    }
+    return data;
+  }
+  data.students = coerceFirestoreArray(data.students);
+  data.expenses = coerceFirestoreArray(data.expenses);
+  if (data.chitData !== undefined && data.chitData !== null) {
+    data.chitData = coerceChitData(data.chitData);
+  }
+  return data;
+}
+
 async function getBusinessSnapshotDoc(businessName) {
   const name = String(businessName || "Nanban").trim() || "Nanban";
   const db = admin.firestore();
   const ref = db.collection("businesses").doc(name).collection("snapshot").doc("main");
   const snap = await ref.get();
-  return snap.exists ? snap.data() || {} : {};
+  const raw = snap.exists ? snap.data() || {} : {};
+  return normalizeSnapshotDocForRead(name, raw);
 }
 
 async function setBusinessSnapshotDoc(businessName, data, merge = true) {
@@ -81,5 +150,7 @@ module.exports = {
   setBusinessSnapshotDoc,
   getRuntimeDoc,
   setRuntimeDoc,
-  getQuizBankRows
+  getQuizBankRows,
+  coerceFirestoreArray,
+  normalizeSnapshotDocForRead
 };

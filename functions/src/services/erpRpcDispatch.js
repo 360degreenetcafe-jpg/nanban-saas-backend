@@ -172,6 +172,7 @@ async function handleErpRpc(action, rawArgs) {
         return { status: "success", message: "native_scheduler_active", native: true };
 
       case "getDatabaseData": {
+        // Firestore path: businesses/Nanban/snapshot/main — getBusinessSnapshotDoc coerces JSON strings / maps to arrays.
         const snap = await getBusinessSnapshotDoc("Nanban");
         return {
           status: "success",
