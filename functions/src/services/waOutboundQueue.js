@@ -6,6 +6,13 @@ const { sanitizeTemplateParamText } = require("../lib/sanitizeTemplateParam");
 const DEFAULT_OUTBOUND_DELAY_SECONDS = 0;
 const TENANT_PER_MINUTE_LIMIT = 45;
 const WA_OUTBOUND_MAX_ATTEMPTS = 10;
+/**
+ * firebase-admin taskQueue("name") defaults to us-central1. Our worker is
+ * onTaskDispatched in asia-south1 (see index.js) — wrong region → Cloud Tasks
+ * "Queue does not exist". Use a location-qualified resource name.
+ */
+const WA_OUTBOUND_TASK_QUEUE_REF =
+  process.env.WA_OUTBOUND_TASK_QUEUE_REF || "locations/asia-south1/functions/waOutboundWorker";
 const DEFAULT_DLQ_ALERT_ADMIN_PHONES = {
   nanban_main: ["919092036666", "919942391870"]
 };
@@ -107,7 +114,7 @@ async function enqueueWaOutboundSend(taskPayload, options) {
   const delaySec = Number(options?.delaySeconds ?? DEFAULT_OUTBOUND_DELAY_SECONDS);
   const scheduleDelaySeconds = Number.isFinite(delaySec) && delaySec > 0 ? Math.floor(delaySec) : 0;
 
-  const queue = getFunctions().taskQueue("waOutboundWorker");
+  const queue = getFunctions().taskQueue(WA_OUTBOUND_TASK_QUEUE_REF);
   const enqueueOptions = {
     dispatchDeadlineSeconds: 30
   };
