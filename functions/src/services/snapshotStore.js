@@ -22,6 +22,14 @@ function coerceFirestoreArray(v) {
     if (keys.length && keys.every((k) => /^\d+$/.test(k))) {
       return keys.sort((a, b) => Number(a) - Number(b)).map((k) => v[k]);
     }
+    // Firestore map keyed by id (e.g. { "1734...": { id, name, ... }, ... })
+    const vals = Object.values(v);
+    if (
+      vals.length &&
+      vals.every((item) => item && typeof item === "object" && !Array.isArray(item))
+    ) {
+      return vals;
+    }
   }
   return [];
 }
