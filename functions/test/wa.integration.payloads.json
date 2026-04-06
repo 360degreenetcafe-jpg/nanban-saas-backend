@@ -1,0 +1,151 @@
+{
+  "description": "Integration payload set for waInboundWorker",
+  "flows": {
+    "flow1_hi_welcome": {
+      "expected": "Welcome text and MENU_FEES hint",
+      "webhookPayload": {
+        "object": "whatsapp_business_account",
+        "entry": [
+          {
+            "id": "entry_flow1",
+            "changes": [
+              {
+                "field": "messages",
+                "value": {
+                  "messaging_product": "whatsapp",
+                  "metadata": {
+                    "display_phone_number": "919999000001",
+                    "phone_number_id": "978781185326220"
+                  },
+                  "messages": [
+                    {
+                      "from": "919900000001",
+                      "id": "wamid.flow1.hi.001",
+                      "timestamp": "1710000001",
+                      "type": "text",
+                      "text": { "body": "Hi" }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "flow2_select_service_dynamic_pricing": {
+      "expected": "Dynamic pricing for FW training (₹3000)",
+      "webhookPayload": {
+        "object": "whatsapp_business_account",
+        "entry": [
+          {
+            "id": "entry_flow2",
+            "changes": [
+              {
+                "field": "messages",
+                "value": {
+                  "messaging_product": "whatsapp",
+                  "metadata": {
+                    "display_phone_number": "919999000001",
+                    "phone_number_id": "978781185326220"
+                  },
+                  "messages": [
+                    {
+                      "from": "919900000002",
+                      "id": "wamid.flow2.sel.001",
+                      "timestamp": "1710000002",
+                      "type": "interactive",
+                      "interactive": {
+                        "type": "list_reply",
+                        "list_reply": {
+                          "id": "FEE_SEL::FW_TRAINING",
+                          "title": "4W Training"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "flow3_idempotency_duplicate": {
+      "expected": "Second identical wamid should be dropped",
+      "webhookPayload": {
+        "object": "whatsapp_business_account",
+        "entry": [
+          {
+            "id": "entry_flow3",
+            "changes": [
+              {
+                "field": "messages",
+                "value": {
+                  "messaging_product": "whatsapp",
+                  "metadata": {
+                    "display_phone_number": "919999000001",
+                    "phone_number_id": "978781185326220"
+                  },
+                  "messages": [
+                    {
+                      "from": "919900000003",
+                      "id": "wamid.flow3.dup.001",
+                      "timestamp": "1710000003",
+                      "type": "interactive",
+                      "interactive": {
+                        "type": "button_reply",
+                        "button_reply": {
+                          "id": "MENU_FEES",
+                          "title": "Fee Details"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "flow4_cutover_toggle": {
+      "expected": "backend_mode gas -> legacy, firebase -> new engine",
+      "webhookPayload": {
+        "object": "whatsapp_business_account",
+        "entry": [
+          {
+            "id": "entry_flow4",
+            "changes": [
+              {
+                "field": "messages",
+                "value": {
+                  "messaging_product": "whatsapp",
+                  "metadata": {
+                    "display_phone_number": "919999000001",
+                    "phone_number_id": "978781185326220"
+                  },
+                  "messages": [
+                    {
+                      "from": "919900000004",
+                      "id": "wamid.flow4.toggle.001",
+                      "timestamp": "1710000004",
+                      "type": "interactive",
+                      "interactive": {
+                        "type": "button_reply",
+                        "button_reply": {
+                          "id": "MENU_FEES",
+                          "title": "கட்டண விவரம்"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

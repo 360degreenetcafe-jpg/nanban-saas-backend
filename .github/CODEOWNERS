@@ -1,0 +1,9 @@
+# Minimal CODEOWNERS
+
+* @360degreenetcafe-jpg
+
+# Critical backend and deployment paths
+functions/** @360degreenetcafe-jpg
+firestore.rules @360degreenetcafe-jpg
+firestore.indexes.json @360degreenetcafe-jpg
+.github/workflows/** @360degreenetcafe-jpg
