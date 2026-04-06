@@ -14,6 +14,24 @@ const TENANT_ID = "nanban_main";
 process.env.WA_INBOUND_PUBLISH_MOCK = "1";
 process.env.WA_OUTBOUND_MOCK = "1";
 
+function resolveProjectId() {
+  if (process.env.GCLOUD_PROJECT) return process.env.GCLOUD_PROJECT;
+  if (process.env.GOOGLE_CLOUD_PROJECT) return process.env.GOOGLE_CLOUD_PROJECT;
+  if (process.env.FIREBASE_CONFIG) {
+    try {
+      const cfg = JSON.parse(process.env.FIREBASE_CONFIG);
+      if (cfg?.projectId) return String(cfg.projectId);
+    } catch (_e) {
+      // Ignore invalid FIREBASE_CONFIG in tests.
+    }
+  }
+  return "nanban-driving-school-d7b20";
+}
+
+const PROJECT_ID = resolveProjectId();
+process.env.GCLOUD_PROJECT = PROJECT_ID;
+process.env.GOOGLE_CLOUD_PROJECT = PROJECT_ID;
+
 function assertTrue(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -80,7 +98,10 @@ async function signInForIdToken(email, password) {
   const url = `http://${host}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key`;
   const res = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      "x-firebase-project": PROJECT_ID
+    },
     body: JSON.stringify({ email, password, returnSecureToken: true })
   });
   const data = await res.json();
@@ -179,7 +200,7 @@ async function run() {
 
   if (!admin.apps.length) {
     admin.initializeApp({
-      projectId: process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || "demo-nanban"
+      projectId: PROJECT_ID
     });
   }
 
