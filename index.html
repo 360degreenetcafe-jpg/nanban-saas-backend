@@ -5478,6 +5478,7 @@
         var key = getNanbanWebWriteKey_();
         return fetch(base + '/v1/rpc', {
             method: 'POST',
+            cache: 'no-store',
             headers: {
                 'Content-Type': 'application/json',
                 'x-nanban-write-key': key
@@ -5765,23 +5766,27 @@
 
     /** Same payload as loadDatabaseLegacy RPC path — used when GET /v1/snapshot fails or returns empty. */
     async function nanbanHydrateFromRpc_() {
-        let res = await apiCall_('getDatabaseData');
-        if (res && res.status === 'success') {
-            studentsData = res.students || [];
-            ensureStudentFeesResolved_(studentsData);
-            expensesData = res.expenses || [];
-            nanbanLastSyncAt = Date.now();
-            localStorage.setItem('nanban_db_cache', JSON.stringify({ students: studentsData, expenses: expensesData }));
-            try {
-                let chitRes = await apiCall_('getChitData');
-                if (chitRes && chitRes.status === 'success') {
-                    chitData = chitRes.data;
-                    localStorage.setItem('nanban_chit_cache', JSON.stringify(chitData));
+        try {
+            var res = await apiCall_('getDatabaseData');
+            if (res && res.status === 'success') {
+                studentsData = nanbanCoerceJsonArray_(res.students);
+                ensureStudentFeesResolved_(studentsData);
+                expensesData = nanbanCoerceJsonArray_(res.expenses);
+                nanbanLastSyncAt = Date.now();
+                localStorage.setItem('nanban_db_cache', JSON.stringify({ students: studentsData, expenses: expensesData }));
+                try {
+                    var chitRes = await apiCall_('getChitData');
+                    if (chitRes && chitRes.status === 'success') {
+                        chitData = chitRes.data;
+                        localStorage.setItem('nanban_chit_cache', JSON.stringify(chitData));
+                    }
+                } catch (chitErr) {
+                    console.warn('getChitData failed:', chitErr);
                 }
-            } catch (chitErr) {
-                console.warn('getChitData failed:', chitErr);
+                return true;
             }
-            return true;
+        } catch (e) {
+            console.warn('nanbanHydrateFromRpc_', e);
         }
         return false;
     }

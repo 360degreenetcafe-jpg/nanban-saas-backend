@@ -129,23 +129,43 @@ function normalizeSnapshotDocForRead(businessName, raw) {
   return data;
 }
 
+/**
+ * Data may live on `businesses/{id}` (parent) and/or `.../snapshot/main`.
+ * Subdoc merge alone drops parent-only rows; pick the longer raw students/expenses.
+ */
+function mergeParentAndSubSnapshot_(parentRaw, subRaw) {
+  const p = parentRaw && typeof parentRaw === "object" ? { ...parentRaw } : {};
+  const s = subRaw && typeof subRaw === "object" ? { ...subRaw } : {};
+  const out = { ...p, ...s };
+  const pickLonger = (key) => {
+    const a = p[key];
+    const b = s[key];
+    return coerceFirestoreArray(b).length > coerceFirestoreArray(a).length ? b : a;
+  };
+  out.students = pickLonger("students");
+  out.expenses = pickLonger("expenses");
+  return out;
+}
+
+async function loadNanbanSnapshotLayers_(db, docId) {
+  const parentSnap = await db.collection("businesses").doc(docId).get();
+  const parentRaw = parentSnap.exists ? parentSnap.data() || {} : {};
+  const ref = db.collection("businesses").doc(docId).collection("snapshot").doc("main");
+  const subSnap = await ref.get();
+  const subRaw = subSnap.exists ? subSnap.data() || {} : {};
+  return mergeParentAndSubSnapshot_(parentRaw, subRaw);
+}
+
 async function getBusinessSnapshotDoc(businessName) {
   const name = String(businessName || "Nanban").trim() || "Nanban";
   const db = admin.firestore();
-  async function readMainDoc(docName) {
-    const ref = db.collection("businesses").doc(docName).collection("snapshot").doc("main");
-    const snap = await ref.get();
-    return snap.exists ? snap.data() || {} : {};
-  }
-  let raw = await readMainDoc(name);
-  let out = normalizeSnapshotDocForRead(name, raw);
+  let merged = await loadNanbanSnapshotLayers_(db, name);
+  let out = normalizeSnapshotDocForRead(name, merged);
   const stuLen = Array.isArray(out.students) ? out.students.length : 0;
   const expLen = Array.isArray(out.expenses) ? out.expenses.length : 0;
   if (name === "Nanban" && stuLen === 0 && expLen === 0) {
-    const rawLo = await readMainDoc("nanban");
-    if (rawLo && typeof rawLo === "object" && Object.keys(rawLo).length) {
-      out = normalizeSnapshotDocForRead("Nanban", rawLo);
-    }
+    merged = await loadNanbanSnapshotLayers_(db, "nanban");
+    out = normalizeSnapshotDocForRead("Nanban", merged);
   }
   return out;
 }
