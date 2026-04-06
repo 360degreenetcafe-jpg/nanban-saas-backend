@@ -4,24 +4,8 @@
       "collectionGroup": "wa_processed",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "processed_at", "order": "DESCENDING" },
-        { "fieldPath": "__name__", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "wa_processed",
-      "queryScope": "COLLECTION",
-      "fields": [
         { "fieldPath": "from", "order": "ASCENDING" },
         { "fieldPath": "processed_at", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "wa_events",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "created_at", "order": "DESCENDING" },
-        { "fieldPath": "__name__", "order": "DESCENDING" }
       ]
     },
     {
