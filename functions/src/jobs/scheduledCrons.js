@@ -5,7 +5,8 @@ const {
   getQuizBankRows,
   getRuntimeDoc
 } = require("../services/snapshotStore");
-const { enqueueWaOutboundSend, isUsableWaMediaUrl } = require("../services/waOutboundQueue");
+const { enqueueWaOutboundSend } = require("../services/waOutboundQueue");
+const { sanitizeTemplateParamText } = require("../lib/sanitizeTemplateParam");
 const { QUIZ_Q: Q, resolveQuizCorrectChoiceNo } = require("../lib/quizRowUtils");
 const { notifyAdminsText } = require("../services/adminNotify");
 const {
@@ -86,6 +87,8 @@ async function runNanbanDailyMorning(opts = {}) {
     const s = students[i];
     try {
       if (s.status === "Deleted") continue;
+      if (s.status === "Hold" || s.status === "Inactive") continue;
+      if (String(s.type || "") === "Enquiry") continue;
 
       if (s.status !== "License_Completed" && quizData.length > 0) {
         const quizIdx = getQuizDayByJoinDate(s);
@@ -118,15 +121,15 @@ async function runNanbanDailyMorning(opts = {}) {
           shuffleInPlace(todayQuestions);
 
           const wa = waE164(s.phone);
-          for (let q = 0; q < todayQuestions.length && q < 3; q++) {
-            const qRow = todayQuestions[q].row;
+          if (todayQuestions.length > 0) {
+            const picked = todayQuestions[0];
+            const qRow = picked.row;
             const titlePrefix =
               String(qRow[Q.cat] || "").trim() === "General" ? "🚦 பொது விழிப்புணர்வு" : "🎯 இன்றைய விசேஷ வினா";
             const optA = String(qRow[Q.o1] || "");
             const optB = String(qRow[Q.o2] || "");
             const optC = String(qRow[Q.o3] || "");
             const qText = String(qRow[Q.ques] || "");
-            const imgUrl = String(qRow[Q.img] || "").trim();
             const msg =
               `${titlePrefix} - (நாள் ${quizIdx}) 🚗🚦\n\n${qText}\n\n1️⃣ ${optA}\n2️⃣ ${optB}\n3️⃣ ${optC}\n\n_சரியான விடையைத் தேர்ந்தெடுக்கவும் (1, 2 அல்லது 3) 👇_`;
 
@@ -138,41 +141,46 @@ async function runNanbanDailyMorning(opts = {}) {
             if (s.quizPendingQueue.length > 15) s.quizPendingQueue = s.quizPendingQueue.slice(-15);
             students[i] = s;
 
+            const tplQuizName = String(cfg.quizTemplate || "daily_quiz_btn").trim() || "daily_quiz_btn";
+            /** daily_quiz_btn: {{1}} day, {{2}} name, {{3}}–{{6}} question + 3 options (text only; buttons are fixed in Meta). */
+            const bodyParams = [
+              String(quizIdx),
+              String(s.name || "நண்பரே"),
+              sanitizeTemplateParamText(qText),
+              sanitizeTemplateParamText(optA),
+              sanitizeTemplateParamText(optB),
+              sanitizeTemplateParamText(optC)
+            ];
+
             if (wa) {
-              if (isUsableWaMediaUrl(imgUrl)) {
+              try {
                 await enqueueWaOutboundSend(
                   {
                     tenantId,
                     to: wa,
-                    message: "",
-                    messageType: "image",
-                    imageLink: imgUrl,
-                    imageCaption: `${titlePrefix} · நாள் ${quizIdx}`,
+                    message: msg,
+                    messageType: "template_with_text_fallback",
+                    template: {
+                      name: tplQuizName,
+                      languageCode: "ta",
+                      bodyParams,
+                      tryFirst: true
+                    },
                     metadata: {
-                      kind: "daily_quiz_image",
+                      kind: "daily_quiz",
                       student_id: String(s.id),
                       quiz_day: quizIdx,
-                      quiz_row: todayQuestions[q].index
+                      quiz_row: picked.index
                     }
                   },
-                  { delaySeconds: bumpDelay(2) }
+                  { delaySeconds: bumpDelay(3) }
                 );
+              } catch (sendErr) {
+                warn("NANBAN_DAILY_QUIZ_ENQUEUE_FAILED", {
+                  studentId: s?.id,
+                  reason: String(sendErr)
+                });
               }
-              await enqueueWaOutboundSend(
-                {
-                  tenantId,
-                  to: wa,
-                  message: msg,
-                  messageType: "text",
-                  metadata: {
-                    kind: "daily_quiz",
-                    student_id: String(s.id),
-                    quiz_day: quizIdx,
-                    quiz_row: todayQuestions[q].index
-                  }
-                },
-                { delaySeconds: bumpDelay(3) }
-              );
             }
           }
 

@@ -31,6 +31,12 @@ function isUsableWaMediaUrl(raw) {
   return true;
 }
 
+function isDailyQuizBtnTemplate_(tplName) {
+  return String(tplName || "")
+    .trim()
+    .toLowerCase() === "daily_quiz_btn";
+}
+
 function minuteBucketKey(now) {
   const d = now || new Date();
   const y = d.getUTCFullYear();
@@ -81,6 +87,20 @@ async function enqueueWaOutboundSend(taskPayload, options) {
     metadata: taskPayload?.metadata || {},
     queuedAt: new Date().toISOString()
   };
+
+  if (taskPayload?.template && typeof taskPayload.template === "object") {
+    const t = { ...taskPayload.template };
+    if (isDailyQuizBtnTemplate_(t.name)) {
+      delete t.headerImageLink;
+    }
+    payload.template = t;
+  }
+  if (String(taskPayload?.imageLink || "").trim()) {
+    payload.imageLink = String(taskPayload.imageLink).trim();
+  }
+  if (String(taskPayload?.imageCaption || "").trim()) {
+    payload.imageCaption = String(taskPayload.imageCaption).trim();
+  }
 
   if (!payload.tenantId) throw new Error("enqueueWaOutboundSend: tenantId required");
   if (!payload.to) throw new Error("enqueueWaOutboundSend: recipient phone required");
@@ -329,7 +349,9 @@ async function sendTemplateViaMeta_(taskPayload, waToken, waPhoneId) {
   const bodyParams = Array.isArray(tpl.bodyParams) ? tpl.bodyParams : [];
   const components = [];
   const headerLink = String(tpl.headerImageLink || "").trim();
-  if (isUsableWaMediaUrl(headerLink)) {
+  /** Meta template is text-only + quick replies — never send an image header or Graph rejects. */
+  const allowHeader = isUsableWaMediaUrl(headerLink) && !isDailyQuizBtnTemplate_(name);
+  if (allowHeader) {
     components.push({
       type: "header",
       parameters: [{ type: "image", image: { link: headerLink } }]

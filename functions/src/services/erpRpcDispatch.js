@@ -1913,15 +1913,12 @@ async function handleErpRpc(action, rawArgs) {
           const optB = String((qRow && qRow[QQ.o2]) || "விடை B");
           const optC = String((qRow && qRow[QQ.o3]) || "விடை C");
           const qText = String((qRow && qRow[QQ.ques]) || "சோதனை வினா");
-          const bodyParam2 =
-            `${titlePrefix} - (நாள் 1) 🚗🚦\n\n${qText}\n\n` +
-            `1️⃣ ${optA}\n2️⃣ ${optB}\n3️⃣ ${optC}\n\n` +
-            `_சரியான விடையைத் தேர்ந்தெடுக்கவும் 👇_`;
           const correctNo = qRow ? resolveQuizCorrectChoiceNo(qRow) : 2;
           const tplQuiz = String(cfg.quizTemplate || "daily_quiz_btn").trim();
           const fb =
             `${titlePrefix}\n\n${qText}\n\n1️⃣ ${optA}\n2️⃣ ${optB}\n3️⃣ ${optC}\n\n(டெம்ப்ளேட் இல்லை எனில் உரை மட்டும் அனுப்பப்பட்டது.)`;
-          await sendTpl(tplQuiz, "ta", [name, bodyParam2], fb);
+          /** daily_quiz_btn: {{1}} day, {{2}} name, {{3}}–{{6}} question + three options */
+          await sendTpl(tplQuiz, "ta", ["1", name, qText, optA, optB, optC], fb);
 
           const phone10Quiz = normPhone10(raw);
           const snapQ = await getBusinessSnapshotDoc("Nanban");
