@@ -4454,7 +4454,7 @@
                     <label style="font-size:12px;">Base URL</label>
                     <input type="text" id="nanbanNativeApiBase" placeholder="https://...nanbanWebIntegration" style="margin:6px 0; width:100%; box-sizing:border-box;">
                     <label style="font-size:12px;">Write key</label>
-                    <input type="password" id="nanbanWebWriteKey" placeholder="Secret" autocomplete="off" style="margin:6px 0; width:100%; box-sizing:border-box;">
+                    <input type="password" id="nanbanWebWriteKey" placeholder="Empty = nanban@2026 (default)" autocomplete="off" style="margin:6px 0; width:100%; box-sizing:border-box;">
                     <button type="button" class="btn btn-p" style="width:100%; font-size:12px; padding:12px; margin-top:8px;" onclick="saveNanbanNativeSettings(); loadNanbanNativeSettingsToForm();">💾 Save</button>
                 </div>
 
@@ -4733,6 +4733,8 @@
     const NANBAN_NATIVE_API_DEFAULT = "https://asia-south1-nanban-driving-school-d7b20.cloudfunctions.net/nanbanWebIntegration";
     const NANBAN_NATIVE_API_LS = "nanban_native_api_base";
     const NANBAN_WEB_WRITE_LS = "nanban_web_write_key";
+    /** Matches Secret Manager NANBAN_WEB_WRITE_KEY when browser has no saved key. */
+    const NANBAN_WEB_WRITE_DEFAULT = "nanban@2026";
     let authLoginMode = 'legacy';
     const SAAS_STAGING_FLAG_KEY = 'nanban_saas_staging_enabled';
     const TENANT_CODE_KEY = 'nanban_tenant_code';
@@ -5501,6 +5503,10 @@
             if (!o.j || o.j.ok !== true) {
                 var err = (o.j && (o.j.error || o.j.message)) ? String(o.j.error || o.j.message) : ('HTTP ' + o.r.status);
                 if (o.j && o.j.result && o.j.result.message) err = String(o.j.result.message);
+                if (o.r.status === 401 || String(err).toLowerCase().indexOf("unauthorized") !== -1) {
+                    err =
+                        "unauthorized — Open ⚙️ Settings → Firebase: clear Web write key & Save (uses default), or set exactly nanban@2026";
+                }
                 throw new Error(err || 'rpc_failed');
             }
             return o.j.result;
@@ -5681,7 +5687,7 @@
         return String(localStorage.getItem(NANBAN_NATIVE_API_LS) || NANBAN_NATIVE_API_DEFAULT).trim().replace(/\/$/, "");
     }
     function getNanbanWebWriteKey_() {
-        return String(localStorage.getItem(NANBAN_WEB_WRITE_LS) || "").trim();
+        return String(localStorage.getItem(NANBAN_WEB_WRITE_LS) || NANBAN_WEB_WRITE_DEFAULT).trim();
     }
     function nanbanNativeConfigured_() {
         return !!getNanbanWebWriteKey_();
@@ -5745,6 +5751,7 @@
         let key = keyEl ? String(keyEl.value || "").trim() : "";
         if (base) localStorage.setItem(NANBAN_NATIVE_API_LS, base);
         if (key) localStorage.setItem(NANBAN_WEB_WRITE_LS, key);
+        else try { localStorage.removeItem(NANBAN_WEB_WRITE_LS); } catch (e) {}
         showToast("Firebase native settings saved", "success");
     }
     function loadNanbanNativeSettingsToForm() {
