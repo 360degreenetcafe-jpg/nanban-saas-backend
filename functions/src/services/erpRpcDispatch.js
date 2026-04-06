@@ -9,6 +9,11 @@ const {
 const { notifyAdminsText } = require("./adminNotify");
 const { enqueueWaOutboundSend } = require("./waOutboundQueue");
 const { inferJobKindFromStudent } = require("./waNativeJobProcessor");
+const {
+  normalizeChit,
+  buildMemberChitPassbook,
+  fixHistoricalChitPayments
+} = require("./nanbanChitFirestore");
 
 const CAR_SYLLABUS = [
   "வாகனக் கட்டுப்பாடுகள் அறிமுகம் (Clutch, Brake, Accelerator).",
@@ -90,6 +95,22 @@ async function saveNanbanPartial(patch) {
     updated_at: admin.firestore.FieldValue.serverTimestamp()
   });
   await setBusinessSnapshotDoc("Nanban", next, true);
+}
+
+async function loadNanbanChit() {
+  const snap = await getBusinessSnapshotDoc("Nanban");
+  return { snap, chit: normalizeChit(snap.chitData) };
+}
+
+async function persistChit(chit) {
+  await saveNanbanPartial({ chitData: chit });
+}
+
+function upiLink_(amount, name, upiId) {
+  if (!upiId || !String(upiId).trim()) return "";
+  const pa = encodeURIComponent(String(upiId).trim());
+  const pn = encodeURIComponent(String(name || "Student").slice(0, 40));
+  return `upi://pay?pa=${pa}&pn=${pn}&am=${parseInt(amount, 10) || 0}&cu=INR`;
 }
 
 /**
@@ -1097,6 +1118,695 @@ async function handleErpRpc(action, rawArgs) {
 
         return { status: "success" };
       }
+
+      case "getStudentPassportData": {
+        const studentId = args[0];
+        const snap = await getBusinessSnapshotDoc("Nanban");
+        const s = (snap.students || []).find((x) => String(x.id) === String(studentId));
+        if (s) return { status: "success", data: s };
+        return { status: "error", message: "Student Not Found" };
+      }
+
+      case "sendLLR30DayReminder": {
+        const studentId = args[0];
+        const snap = await getBusinessSnapshotDoc("Nanban");
+        const s = (snap.students || []).find((x) => String(x.id) === String(studentId));
+        if (!s) return { status: "error", message: `மாணவர் கிடைக்கவில்லை! (ID: ${studentId})` };
+        const wa = waE164_(s.phone);
+        if (!wa) return { status: "error", message: "Phone missing" };
+        const msg = `வணக்கம் ${s.name}! 🎉\nஉங்கள் LLR பதிவு செய்து இன்று 30 நாள் நிறைவடைந்துள்ளது.\n\nஇப்போது நீங்கள் RTO டெஸ்ட் தேதி பதிவு செய்ய தயாராக இருக்கிறீர்கள். 🚗\nதேதி fix செய்ய அலுவலகத்தைத் தொடர்பு கொள்ளவும் 👇`;
+        await enqueueWaOutboundSend(
+          { tenantId: TENANT_DEFAULT, to: wa, message: msg, messageType: "text", metadata: { kind: "llr_30d", student_id: String(studentId) } },
+          { delaySeconds: 0 }
+        );
+        return { status: "success", message: "30 நாள் நினைவூட்டல் மெசேஜ் அனுப்பப்பட்டது! ✅" };
+      }
+
+      case "sendLLRExpireReminder": {
+        const studentId = args[0];
+        const snap = await getBusinessSnapshotDoc("Nanban");
+        const s = (snap.students || []).find((x) => String(x.id) === String(studentId));
+        if (!s) return { status: "error", message: `மாணவர் கிடைக்கவில்லை! (ID: ${studentId})` };
+        const wa = waE164_(s.phone);
+        if (!wa) return { status: "error", message: "Phone missing" };
+        const txt =
+          "உங்கள் LLR இன்னும் சில நாட்களில் காலாவதியாக உள்ளது. தயவுசெய்து உடனே புதுப்பிக்கவும். - நண்பன் டிரைவிங் ஸ்கூல்";
+        try {
+          await enqueueWaOutboundSend(
+            {
+              tenantId: TENANT_DEFAULT,
+              to: wa,
+              message: "",
+              messageType: "template",
+              template: { name: "bulk_announcement", languageCode: "ta", bodyParams: [txt] },
+              metadata: { kind: "llr_expire", student_id: String(studentId) }
+            },
+            { delaySeconds: 0 }
+          );
+        } catch (e) {
+          await enqueueWaOutboundSend(
+            {
+              tenantId: TENANT_DEFAULT,
+              to: wa,
+              message: txt,
+              messageType: "text",
+              metadata: { kind: "llr_expire_fb", student_id: String(studentId) }
+            },
+            { delaySeconds: 0 }
+          );
+        }
+        return { status: "success", message: "LLR காலாவதி நினைவூட்டல் அனுப்பப்பட்டது! ✅" };
+      }
+
+      case "markSyllabusAction": {
+        const studentId = args[0];
+        const itemKey = args[1];
+        const isCompleted = !!args[2];
+        const snap = await getBusinessSnapshotDoc("Nanban");
+        let students = Array.isArray(snap.students) ? snap.students.map((x) => ({ ...x })) : [];
+        const ix = students.findIndex((x) => String(x.id) === String(studentId));
+        if (ix < 0) return { status: "error", message: "Student not found" };
+        const st = { ...students[ix] };
+        if (!st.syllabus) st.syllabus = {};
+        st.syllabus[itemKey] = isCompleted;
+        st.syllabusLastUpdate = getISTDateString();
+        students[ix] = st;
+        await saveNanbanPartial({ students });
+        return { status: "success", syllabus: st.syllabus };
+      }
+
+      case "sendPaymentReminderAction": {
+        const studentId = args[0];
+        const adminName = String(args[1] || "");
+        const snap = await getBusinessSnapshotDoc("Nanban");
+        const s = (snap.students || []).find((x) => String(x.id) === String(studentId));
+        if (!s) return { status: "error", msg: "Student not found" };
+        const bal =
+          (parseInt(s.totalFee, 10) || 0) - (parseInt(s.advance, 10) || 0) - (parseInt(s.discount, 10) || 0);
+        if (bal <= 0) return { status: "error", msg: "இவருக்கு பேலன்ஸ் ஏதும் இல்லை." };
+        const cfg = nanbanTemplateCfg_(snap);
+        const wa = waE164_(s.phone);
+        if (wa) {
+          try {
+            await enqueueWaOutboundSend(
+              {
+                tenantId: TENANT_DEFAULT,
+                to: wa,
+                message: "",
+                messageType: "template",
+                template: {
+                  name: cfg.paymentReminderTemplate || "payment_reminder_nds",
+                  languageCode: "ta",
+                  bodyParams: [String(s.name || "நண்பரே"), String(bal)]
+                },
+                metadata: { kind: "payment_reminder", student_id: String(studentId) }
+              },
+              { delaySeconds: 0 }
+            );
+          } catch (e) {
+            await enqueueWaOutboundSend(
+              {
+                tenantId: TENANT_DEFAULT,
+                to: wa,
+                message: `🔔 *கட்டண நினைவூட்டல் (Reminder)*\n\nவணக்கம் ${s.name},\nஉங்கள் ஓட்டுநர் பயிற்சி கட்டணத்தில் ₹${bal} நிலுவையில் உள்ளது.\n\nநன்றி! 🙏\n- நண்பன் டிரைவிங் ஸ்கூல்`,
+                messageType: "text",
+                metadata: { kind: "payment_reminder_fb", student_id: String(studentId) }
+              },
+              { delaySeconds: 0 }
+            );
+          }
+          const upiId = cfg.businessUpi || "";
+          const link = upiLink_(bal, s.name, upiId);
+          if (link) {
+            await enqueueWaOutboundSend(
+              {
+                tenantId: TENANT_DEFAULT,
+                to: wa,
+                message: `💳 *சுலபமாக பணம் செலுத்த (Online UPI):*\n\n👉 ${link}\n\n🆔 *${upiId}*`,
+                messageType: "text",
+                metadata: { kind: "payment_upi", student_id: String(studentId) }
+              },
+              { delaySeconds: 2 }
+            );
+          }
+        }
+        let students = Array.isArray(snap.students) ? snap.students.map((x) => ({ ...x })) : [];
+        const ix = students.findIndex((x) => String(x.id) === String(studentId));
+        if (ix >= 0) {
+          const st = { ...students[ix] };
+          if (!Array.isArray(st.adminRemarks)) st.adminRemarks = [];
+          st.adminRemarks.unshift({ date: getISTDateString(), text: `🔔 Payment Reminder அனுப்பப்பட்டது (${adminName})` });
+          students[ix] = st;
+          await saveNanbanPartial({ students });
+        }
+        return { status: "success", msg: "மெசேஜ் அனுப்பப்பட்டது!" };
+      }
+
+      case "bulkSendRemindersAction": {
+        const studentIds = args[0];
+        const type = args[1];
+        if (!Array.isArray(studentIds) || !studentIds.length) return { status: "error", msg: "No students selected." };
+        const snap = await getBusinessSnapshotDoc("Nanban");
+        const list = snap.students || [];
+        let sentCount = 0;
+        let failCount = 0;
+        let delay = 0;
+        for (const id of studentIds) {
+          const s = list.find((x) => String(x.id) === String(id));
+          if (!s || !s.phone) {
+            failCount++;
+            continue;
+          }
+          const wa = waE164_(s.phone);
+          if (!wa) {
+            failCount++;
+            continue;
+          }
+          delay += 2;
+          try {
+            if (type === "today_30") {
+              await enqueueWaOutboundSend(
+                {
+                  tenantId: TENANT_DEFAULT,
+                  to: wa,
+                  message: "",
+                  messageType: "template",
+                  template: { name: "llr_30_days_reminder", languageCode: "ta", bodyParams: [String(s.name || "-")] },
+                  metadata: { kind: "bulk_llr30", student_id: String(id) }
+                },
+                { delaySeconds: delay }
+              );
+            } else {
+              const txt =
+                "உங்கள் LLR இன்னும் சில நாட்களில் காலாவதியாக உள்ளது. தயவுசெய்து புதுப்பிக்கவும்.";
+              await enqueueWaOutboundSend(
+                {
+                  tenantId: TENANT_DEFAULT,
+                  to: wa,
+                  message: "",
+                  messageType: "template",
+                  template: { name: "bulk_announcement", languageCode: "ta", bodyParams: [txt] },
+                  metadata: { kind: "bulk_llr_exp", student_id: String(id) }
+                },
+                { delaySeconds: delay }
+              );
+            }
+            sentCount++;
+          } catch (e) {
+            failCount++;
+          }
+        }
+        return { status: "success", msg: `${sentCount} மெசேஜ்கள் அனுப்பப்பட்டன. (தோல்வி: ${failCount})` };
+      }
+
+      case "syncOldStudentsData": {
+        return { status: "success", msg: "பழைய டேட்டா சின்க் செய்யப்பட்டது! (Firebase native)" };
+      }
+
+      case "processReTestUpdate": {
+        const studentId = args[0];
+        const testFee = parseInt(args[1], 10) || 0;
+        const advancePaid = parseInt(args[2], 10) || 0;
+        const newDate = args[3];
+        const adminName = String(args[4] || "");
+        const today = getISTDateString();
+        const snap = await getBusinessSnapshotDoc("Nanban");
+        let students = Array.isArray(snap.students) ? snap.students.map((x) => ({ ...x })) : [];
+        const ix = students.findIndex((x) => String(x.id) === String(studentId));
+        if (ix < 0) return { status: "error" };
+        const s = { ...students[ix] };
+        s.totalFee = (parseInt(s.totalFee, 10) || 0) + testFee;
+        if (advancePaid > 0) {
+          if (!Array.isArray(s.paymentHistory)) s.paymentHistory = [];
+          const dup = s.paymentHistory.find(
+            (p) =>
+              p &&
+              p.date === today &&
+              parseInt(p.amount, 10) === advancePaid &&
+              String(p.note || "").includes("Re-Test") &&
+              String(p.note || "").includes(adminName)
+          );
+          if (dup) return { status: "error", message: "Duplicate payment detected" };
+          s.advance = (parseInt(s.advance, 10) || 0) + advancePaid;
+          s.paymentHistory.unshift({ date: today, amount: advancePaid, note: `Re-Test கட்டணம் (${adminName})` });
+        }
+        s.testDate = newDate;
+        s.testStatus = "Pending";
+        s.status = "Ready_for_Test";
+        if (!Array.isArray(s.adminRemarks)) s.adminRemarks = [];
+        s.adminRemarks.unshift({ date: today, text: `🔄 Re-Test பதிவு: ₹${testFee}. தேதி: ${newDate}` });
+        students[ix] = s;
+        await saveNanbanPartial({ students });
+        await notifyAdminsText(tenantId, `🔄 *Re-Test பதிவு:*\nமாணவர்: ${s.name}\nகட்டணம்: ₹${testFee}\nதேதி: ${newDate}`);
+        const wa = waE164_(s.phone);
+        if (wa) {
+          const cfg = nanbanTemplateCfg_(snap);
+          const dateLabel = String(newDate || "").split("-").length === 3 ? `${newDate.split("-")[2]}/${newDate.split("-")[1]}/${newDate.split("-")[0]}` : String(newDate || "-");
+          try {
+            await enqueueWaOutboundSend(
+              {
+                tenantId: TENANT_DEFAULT,
+                to: wa,
+                message: "",
+                messageType: "template",
+                template: {
+                  name: cfg.rtoTemplate || "rto_test_reminder",
+                  languageCode: "ta",
+                  bodyParams: [String(s.name || "-"), String(dateLabel || "-"), String(cfg.inspectorTime || "-")]
+                },
+                metadata: { kind: "retest_rto", student_id: String(studentId) }
+              },
+              { delaySeconds: 0 }
+            );
+          } catch (e) {
+            await enqueueWaOutboundSend(
+              {
+                tenantId: TENANT_DEFAULT,
+                to: wa,
+                message: `🎯 RTO டெஸ்ட் நினைவூட்டல்\n\nவணக்கம் ${s.name},\nடெஸ்ட் தேதி: ${newDate}\n- நண்பன் டிரைவிங் ஸ்கூல்`,
+                messageType: "text",
+                metadata: { kind: "retest_rto_fb", student_id: String(studentId) }
+              },
+              { delaySeconds: 0 }
+            );
+          }
+        }
+        return { status: "success" };
+      }
+
+      case "processFundTransfer": {
+        const fromPerson = args[0];
+        const toPerson = args[1];
+        const amt = parseInt(args[2], 10) || 0;
+        const desc = String(args[3] || "");
+        const loggedBy = String(args[4] || "");
+        const d = getISTDateString();
+        const snap = await getBusinessSnapshotDoc("Nanban");
+        const expenses = Array.isArray(snap.expenses) ? [...snap.expenses] : [];
+        expenses.unshift({
+          date: d,
+          spender: fromPerson,
+          cat: "🔄 பணப் பரிமாற்றம் (Out)",
+          amt,
+          desc: `To ${toPerson}: ${desc} (By ${loggedBy})`
+        });
+        expenses.unshift({
+          date: d,
+          spender: toPerson,
+          cat: "🔄 பணப் பரிமாற்றம் (In)",
+          amt,
+          desc: `From ${fromPerson}: ${desc} (By ${loggedBy})`
+        });
+        await saveNanbanPartial({ expenses });
+        await notifyAdminsText(
+          tenantId,
+          `🔄 *பணப் பரிமாற்றம் (Transfer)*\n\nகொடுத்தவர்: ${fromPerson}\nபெற்றவர்: ${toPerson}\nதொகை: ₹${amt}\nவிவரம்: ${desc}\nபதிவு: ${loggedBy}`
+        );
+        return { status: "success" };
+      }
+
+      case "saveChitGroup": {
+        const gObj = args[0] || {};
+        const { chit } = await loadNanbanChit();
+        const idToUse = gObj.id || String(Date.now());
+        const row = {
+          id: idToUse,
+          name: gObj.name,
+          total: gObj.total,
+          months: gObj.months,
+          members: gObj.members,
+          status: gObj.status || "Active",
+          ranjithQuota: parseInt(gObj.rQuota, 10) || 0,
+          nandhaQuota: parseInt(gObj.nQuota, 10) || 0,
+          companyQuota: parseInt(gObj.cQuota, 10) || 0
+        };
+        const groups = Array.isArray(chit.groups) ? [...chit.groups] : [];
+        const gi = groups.findIndex((g) => String(g.id) === String(idToUse));
+        if (gi >= 0) groups[gi] = row;
+        else groups.push(row);
+        chit.groups = groups;
+        await persistChit(chit);
+        return { status: "success" };
+      }
+
+      case "saveChitAuction": {
+        const auctionObj = args[0] || {};
+        const isOldHistory = !!args[1];
+        const { snap, chit } = await loadNanbanChit();
+        const d = getISTDateString();
+        const id = String(Date.now());
+        const expensesAmt = parseInt(auctionObj.expenses, 10) || 0;
+        const commission = parseInt(auctionObj.commission, 10) || 0;
+        const netProfit = commission - expensesAmt;
+        const auctionStatus = isOldHistory ? "Settled" : "Active";
+        const row = {
+          id,
+          group: auctionObj.group,
+          month: auctionObj.monthNo,
+          date: d,
+          winner: auctionObj.winner,
+          interestRate: auctionObj.interestRate || "0",
+          discount: auctionObj.discount,
+          commission: auctionObj.commission,
+          perHead: auctionObj.perHead,
+          status: auctionStatus,
+          bidders: auctionObj.bidders || "",
+          expenses: String(expensesAmt),
+          netProfit: String(netProfit)
+        };
+        chit.auctions.unshift(row);
+        if (isOldHistory) {
+          const members = chit.members.filter((m) => m.group === auctionObj.group);
+          const perHead = parseInt(auctionObj.perHead, 10) || 0;
+          for (const m of members) {
+            chit.payments.unshift({
+              id: String(Date.now() + Math.floor(Math.random() * 1000)),
+              auctionId: id,
+              memberName: m.name,
+              phone: m.phone || "",
+              amount: perHead,
+              receiver: "Historical Entry",
+              date: d
+            });
+          }
+          await persistChit(chit);
+        } else {
+          let expensesList = Array.isArray(snap.expenses) ? [...snap.expenses] : [];
+          if (commission > 0) {
+            expensesList.unshift({
+              date: d,
+              spender: "Office",
+              cat: "🟢 வரவு - சீட்டு கமிஷன்",
+              amt: commission,
+              desc: `${auctionObj.group} (Month ${auctionObj.monthNo})`
+            });
+          }
+          if (expensesAmt > 0) {
+            expensesList.unshift({
+              date: d,
+              spender: "Office",
+              cat: "🔴 செலவு - சீட்டு செலவு",
+              amt: expensesAmt,
+              desc: `${auctionObj.group} (Month ${auctionObj.monthNo})`
+            });
+          }
+          chit.bids = [];
+          await saveNanbanPartial({ chitData: chit, expenses: expensesList });
+          const cfg = nanbanTemplateCfg_(snap);
+          const members = chit.members.filter((m) => m.group === auctionObj.group);
+          const winMsg = `📢 *சீட்டு ஏல முடிவு - Month ${auctionObj.monthNo}*\n\nகுழு: ${auctionObj.group}\n🏆 ஏலம் எடுத்தவர்: *${auctionObj.winner || "தகவல் இல்லை"}*\nதள்ளுபடி: ₹${auctionObj.discount}\n\nஇந்த மாதம் ஒவ்வொருவரும் கட்ட வேண்டிய தொகை: *₹${auctionObj.perHead}*\n\nதயவுசெய்து தொகையைச் செலுத்தவும். 🙏`;
+          let delay = 0;
+          for (const m of members) {
+            const wa = waE164_(m.phone);
+            if (!wa) continue;
+            delay += 2;
+            try {
+              await enqueueWaOutboundSend(
+                {
+                  tenantId: TENANT_DEFAULT,
+                  to: wa,
+                  message: "",
+                  messageType: "template",
+                  template: {
+                    name: cfg.chitAuctionTemplate || "chit_auction_alert",
+                    languageCode: "ta",
+                    bodyParams: [String(auctionObj.group || "-"), String(d || "-")]
+                  },
+                  metadata: { kind: "chit_auction", auction_id: id }
+                },
+                { delaySeconds: delay }
+              );
+            } catch (e) {
+              await enqueueWaOutboundSend(
+                {
+                  tenantId: TENANT_DEFAULT,
+                  to: wa,
+                  message: winMsg,
+                  messageType: "text",
+                  metadata: { kind: "chit_auction_fb", auction_id: id }
+                },
+                { delaySeconds: delay }
+              );
+            }
+          }
+        }
+        return { status: "success", auctionId: id };
+      }
+
+      case "settleAuctionWinner": {
+        const auctionId = args[0];
+        const { chit } = await loadNanbanChit();
+        const auctions = chit.auctions.map((a) => ({ ...a }));
+        const ix = auctions.findIndex((a) => String(a.id) === String(auctionId));
+        if (ix < 0) return { status: "error", message: "Auction not found" };
+        if (String(auctions[ix].status) === "Settled") return { status: "error", message: "Already settled" };
+        auctions[ix] = { ...auctions[ix], status: "Settled" };
+        chit.auctions = auctions;
+        await persistChit(chit);
+        await notifyAdminsText(tenantId, `🤝 *சீட்டு பட்டுவாடா நிறைவு*\n\nஏல எண்: ${auctionId}\nநிலை: Settled`);
+        return { status: "success" };
+      }
+
+      case "deleteChitAuction": {
+        const auctionId = args[0];
+        const { chit } = await loadNanbanChit();
+        const before = chit.auctions.length;
+        chit.auctions = chit.auctions.filter((a) => String(a.id) !== String(auctionId));
+        if (chit.auctions.length === before) return { status: "error", message: "Auction not found" };
+        await persistChit(chit);
+        return { status: "success" };
+      }
+
+      case "saveChitPayment": {
+        const payObj = args[0] || {};
+        payObj.phone = normPhone10(payObj.phone);
+        if (payObj.phone && String(payObj.phone).length !== 10) {
+          return { status: "error", message: "Invalid phone (10-digit required)" };
+        }
+        const { chit } = await loadNanbanChit();
+        const id = String(Date.now());
+        const d = getISTDateString();
+        chit.payments.unshift({
+          id,
+          auctionId: payObj.auctionId,
+          memberName: payObj.memberName,
+          amount: payObj.amount,
+          receiver: payObj.receiver,
+          date: d,
+          phone: payObj.phone || ""
+        });
+        await persistChit(chit);
+        const wa = waE164_(payObj.phone);
+        if (wa) {
+          const msg = `💰 வணக்கம் ${payObj.memberName},\nஉங்களின் இந்த மாத சீட்டுத் தொகை ₹${payObj.amount} பெறப்பட்டது. (வசூலர்: ${payObj.receiver})\nநன்றி! 🙏\n- நண்பன் சீட்டு நிறுவனம்`;
+          await enqueueWaOutboundSend(
+            {
+              tenantId: TENANT_DEFAULT,
+              to: wa,
+              message: msg,
+              messageType: "text",
+              metadata: { kind: "chit_payment", payment_id: id }
+            },
+            { delaySeconds: 0 }
+          );
+        }
+        await notifyAdminsText(
+          tenantId,
+          `💰 *சீட்டு வசூல்!*\n\nமெம்பர்: ${payObj.memberName}\nதொகை: ₹${payObj.amount}\nபெற்றவர்: ${payObj.receiver}`
+        );
+        return { status: "success" };
+      }
+
+      case "sendChitBulkAlert": {
+        const phonesArray = args[0] || [];
+        const msgTemplate = String(args[1] || "");
+        const snap = await getBusinessSnapshotDoc("Nanban");
+        const cfg = nanbanTemplateCfg_(snap);
+        let successCount = 0;
+        let delay = 0;
+        for (let i = 0; i < phonesArray.length; i++) {
+          const item = phonesArray[i];
+          const phone = typeof item === "object" && item ? item.phone : item;
+          const name = typeof item === "object" && item ? item.name : "";
+          const group = typeof item === "object" && item ? item.group : "";
+          if (!phone) continue;
+          delay += 2;
+          const wa = waE164_(phone);
+          if (!wa) continue;
+          try {
+            await enqueueWaOutboundSend(
+              {
+                tenantId: TENANT_DEFAULT,
+                to: wa,
+                message: "",
+                messageType: "template",
+                template: {
+                  name: cfg.chitDueTemplate || "chit_due_reminder",
+                  languageCode: "ta",
+                  bodyParams: [String(name || "நண்பரே"), String(group || "சீட்டு குழு")]
+                },
+                metadata: { kind: "chit_bulk_due" }
+              },
+              { delaySeconds: delay }
+            );
+          } catch (e) {
+            await enqueueWaOutboundSend(
+              {
+                tenantId: TENANT_DEFAULT,
+                to: wa,
+                message: msgTemplate,
+                messageType: "text",
+                metadata: { kind: "chit_bulk_due_fb" }
+              },
+              { delaySeconds: delay }
+            );
+          }
+          successCount++;
+        }
+        return { status: "success", msg: `${successCount} பேருக்கு மெசேஜ் அனுப்பப்பட்டது!` };
+      }
+
+      case "triggerLiveChitBidding": {
+        const groupName = args[0];
+        const { chit } = await loadNanbanChit();
+        const members = chit.members.filter((m) => m.group === groupName);
+        const bidMsg = `📢 *சீட்டு ஏலம் ஆரம்பம்!*\n\nகுழு: ${groupName}\n\nஉங்களின் ஏலத் தொகையை (எ.கா: 15000) வாட்ஸ்அப்பில் ரிப்ளை செய்யவும். ஏலம் அரை மணி நேரத்தில் முடிவடையும்.`;
+        let count = 0;
+        let delay = 0;
+        for (const m of members) {
+          const wa = waE164_(m.phone);
+          if (!wa) continue;
+          delay += 2;
+          await enqueueWaOutboundSend(
+            { tenantId: TENANT_DEFAULT, to: wa, message: bidMsg, messageType: "text", metadata: { kind: "chit_live_bid", group: String(groupName) } },
+            { delaySeconds: delay }
+          );
+          count++;
+        }
+        return { status: "success", msg: `${count} பேருக்கு ஏல அறிவிப்பு சென்றது!` };
+      }
+
+      case "sendChitAdvanceAlert": {
+        const groupName = args[0];
+        const dateText = String(args[1] || "");
+        const note = String(args[2] || "");
+        const rawDate = String(args[3] || "");
+        const { chit } = await loadNanbanChit();
+        const d = getISTDateString();
+        if (rawDate) {
+          const sched = Array.isArray(chit.schedule) ? [...chit.schedule] : [];
+          const si = sched.findIndex((r) => (r.groupName || r[0]) === groupName);
+          const row =
+            typeof sched[0] === "object" && !Array.isArray(sched[0])
+              ? { groupName, displayDate: dateText, rawDate, savedOn: d }
+              : [groupName, dateText, rawDate, d];
+          if (si >= 0) sched[si] = row;
+          else sched.push(row);
+          chit.schedule = sched;
+          await persistChit(chit);
+        }
+        const pastAuctions = chit.auctions.filter((a) => a.group === groupName);
+        const nextAucNo = pastAuctions.length + 1;
+        const aucNoStr = `${nextAucNo}வது`;
+        const noteStr = note ? `\n\n📌 குறிப்பு: ${note}` : "";
+        const members = chit.members.filter((m) => m.group === groupName);
+        const snap = await getBusinessSnapshotDoc("Nanban");
+        const cfg = nanbanTemplateCfg_(snap);
+        let count = 0;
+        let delay = 0;
+        for (const m of members) {
+          const wa = waE164_(m.phone);
+          if (!wa) continue;
+          delay += 2;
+          const personalMsg = `வணக்கம் ${m.name}!\n\n*${groupName}* - ${aucNoStr} ஏலம் ${dateText} நடைபெறுகிறது.${noteStr}\n\n- நண்பன் சீட்டு`;
+          try {
+            await enqueueWaOutboundSend(
+              {
+                tenantId: TENANT_DEFAULT,
+                to: wa,
+                message: "",
+                messageType: "template",
+                template: {
+                  name: "chit_auction_alert",
+                  languageCode: "ta",
+                  bodyParams: [String(m.name || "-"), String(groupName || "-"), String(dateText || "-")]
+                },
+                metadata: { kind: "chit_prealert", group: String(groupName) }
+              },
+              { delaySeconds: delay }
+            );
+          } catch (e) {
+            await enqueueWaOutboundSend(
+              {
+                tenantId: TENANT_DEFAULT,
+                to: wa,
+                message: personalMsg,
+                messageType: "text",
+                metadata: { kind: "chit_prealert_fb", group: String(groupName) }
+              },
+              { delaySeconds: delay }
+            );
+          }
+          count++;
+        }
+        return { status: "success", msg: `${count} பேருக்கு அறிவிப்பு சென்றது!` };
+      }
+
+      case "getMemberChitPassbook": {
+        const name = args[0];
+        const { chit } = await loadNanbanChit();
+        return buildMemberChitPassbook(name, chit);
+      }
+
+      case "fixAllHistoricalChitPayments": {
+        const { chit } = await loadNanbanChit();
+        const { chit: fixed, fixes } = fixHistoricalChitPayments(chit);
+        await persistChit(fixed);
+        return { status: "success", message: `${fixes} payments were fixed and marked as Paid! ✅` };
+      }
+
+      case "saveCashOpeningAction": {
+        const monthKey = String(args[0] || "").trim();
+        const ranjithAmt = args[1];
+        const nandhaAmt = args[2];
+        const officeAmt = args[3];
+        const loggedBy = String(args[4] || "");
+        if (!monthKey) return { status: "error", message: "Month required" };
+        const snap = await getBusinessSnapshotDoc("Nanban");
+        const appSettings = snap.appSettings && typeof snap.appSettings === "object" ? { ...snap.appSettings } : {};
+        if (!appSettings.appSettings) appSettings.appSettings = {};
+        if (!appSettings.appSettings.cashOpeningByMonth) appSettings.appSettings.cashOpeningByMonth = {};
+        appSettings.appSettings.cashOpeningByMonth[monthKey] = {
+          ranjith: parseInt(ranjithAmt, 10) || 0,
+          nandha: parseInt(nandhaAmt, 10) || 0,
+          office: parseInt(officeAmt, 10) || 0,
+          by: loggedBy
+        };
+        await saveNanbanPartial({ appSettings });
+        return { status: "success" };
+      }
+
+      case "getAuditLogAction":
+      case "getFilingEntriesAction":
+        return { status: "success", items: [], message: "Native mode: audit/filing logs are not migrated from Sheets. Use Firestore console if needed." };
+
+      case "generateFilingIndexPdfAction":
+      case "generateFullAuditPdfAction":
+      case "generateMonthlyPdfPackAction":
+      case "generateMonthlyCashbookPdfAction":
+        return {
+          status: "error",
+          message:
+            "PDF reports are not generated on Firebase (legacy GAS used Google Drive). Export data from Firestore or reintroduce a PDF Cloud Function later."
+        };
+
+      case "uploadFileToDrive":
+      case "processFileUpload":
+        return {
+          status: "error",
+          message:
+            "Drive upload is not available in Firebase native mode. Use client-side storage (e.g. Firebase Storage) in a future update."
+        };
 
       default:
         return {
