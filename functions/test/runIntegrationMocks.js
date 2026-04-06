@@ -11,7 +11,9 @@ if (!process.env.FIRESTORE_EMULATOR_HOST) {
 }
 
 if (!admin.apps.length) {
-  admin.initializeApp({ projectId: process.env.GCLOUD_PROJECT || "demo-nanban" });
+  admin.initializeApp({
+    projectId: process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || "nanban-driving-school-d7b20"
+  });
 }
 
 const db = admin.firestore();
