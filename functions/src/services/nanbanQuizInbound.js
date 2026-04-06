@@ -27,20 +27,45 @@ function cleanQuizInboundText(msg) {
 
 function parseQuizChoiceFromText(msg) {
   const t = cleanQuizInboundText(msg);
-  if (t === "1" || t.includes("முதல்")) return 1;
-  if (t === "2" || t.includes("இரண்டாம்") || t.includes("இரண்டு")) return 2;
-  if (t === "3" || t.includes("மூன்றாம்") || t.includes("மூன்று")) return 3;
+  if (t === "1" || t === "1️⃣" || t.includes("முதல் விடை") || (t.includes("முதல்") && t.includes("விடை")))
+    return 1;
+  if (
+    t === "2" ||
+    t === "2️⃣" ||
+    t.includes("இரண்டாம் விடை") ||
+    t.includes("இரண்டாம்") ||
+    t.includes("இரண்டு")
+  )
+    return 2;
+  if (t === "3" || t === "3️⃣" || t.includes("மூன்றாம் விடை") || t.includes("மூன்றாம்") || t.includes("மூன்று"))
+    return 3;
   return 0;
 }
 
 function parseQuizChoiceFromButton(id) {
-  const s = String(id || "");
+  const s = String(id || "").trim();
   const m = s.match(/QUIZ_(?:CORRECT|WRONG)_(\d+)_(\d+)/i);
   if (m) {
     const userPick = parseInt(m[2], 10);
     if (userPick >= 1 && userPick <= 3) return userPick;
   }
+  if (/^[123]$/.test(s)) return parseInt(s, 10);
+  const low = s.toLowerCase();
+  if (low === "btn_1" || low === "option_1" || low.endsWith("_1") || low === "answer_1") return 1;
+  if (low === "btn_2" || low === "option_2" || low.endsWith("_2") || low === "answer_2") return 2;
+  if (low === "btn_3" || low === "option_3" || low.endsWith("_3") || low === "answer_3") return 3;
   return 0;
+}
+
+/** Button replies have empty `text.body`; use interactive title + id. */
+function resolveQuizChoiceFromInbound(inbound) {
+  if (inbound?.interactive?.kind === "button_reply") {
+    const idPick = parseQuizChoiceFromButton(inbound.interactive.id);
+    if (idPick) return idPick;
+    const titlePick = parseQuizChoiceFromText(inbound.interactive.title || "");
+    if (titlePick) return titlePick;
+  }
+  return parseQuizChoiceFromText(inbound?.text || "");
 }
 
 async function persistNanbanStudents(students) {
@@ -66,11 +91,7 @@ async function tryHandleNanbanQuizInbound({ tenantId, inbound }) {
   const phone10 = digitsPhone(fromWa);
   if (!phone10) return { handled: false };
 
-  let choice = 0;
-  if (inbound?.interactive?.kind === "button_reply") {
-    choice = parseQuizChoiceFromButton(inbound.interactive.id);
-  }
-  if (!choice) choice = parseQuizChoiceFromText(inbound?.text || "");
+  const choice = resolveQuizChoiceFromInbound(inbound);
   if (!choice) return { handled: false };
 
   const snap = await getBusinessSnapshotDoc("Nanban");
@@ -115,10 +136,7 @@ async function tryHandleNanbanQuizInbound({ tenantId, inbound }) {
 
   const to = waE164FromInbound(fromWa);
   if (to) {
-    const okMsg =
-      "🎉 சபாஷ்! சரியான விடை.\n" +
-      "உங்கள் விழிப்புணர்வு மதிப்பெண் ஏறியுள்ளது (+₹1). நாளை அடுத்த கேள்வியுடன் சந்திப்போம்! 🚗\n" +
-      "- நண்பன் டிரைவிங் ஸ்கூல்";
+    const okMsg = "சரியான விடை! உங்கள் வாலட்டில் ₹1 வரவு வைக்கப்பட்டது.";
     const badMsg =
       "❌ தவறான விடை.\n" +
       "பரவாயில்லை, நாளை மீண்டும் முயற்சி செய்வோம்! விழிப்புணர்வுடன் ஓட்டுங்கள். 🚦\n" +

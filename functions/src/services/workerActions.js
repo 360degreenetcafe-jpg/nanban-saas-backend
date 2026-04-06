@@ -86,9 +86,14 @@ async function processInboundBusinessActions(ctx) {
     return { mode: "firebase", handled: true, quiz: true };
   }
 
-  const clicked = inbound?.interactive?.id || inbound?.interactive?.title || inbound?.text || "";
+  const pid = String(inbound?.interactive?.id || "").trim();
+  const clicked = pid || inbound?.interactive?.title || inbound?.text || "";
 
-  if (clicked) {
+  const isQuizLike =
+    /^QUIZ_/i.test(pid) ||
+    /முதல் விடை|இரண்டாம் விடை|மூன்றாம் விடை/.test(String(inbound?.interactive?.title || ""));
+
+  if (clicked && !isQuizLike) {
     await queueAdminLeadAlert(tenantId, inbound?.from || "", clicked);
   }
 

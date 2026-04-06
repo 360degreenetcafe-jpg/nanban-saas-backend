@@ -1897,21 +1897,44 @@ async function handleErpRpc(action, rawArgs) {
           const fb = `வணக்கம் ${name}! RTO டெஸ்ட் நினைவூட்டல் (சோதனை). ${dateStr} ${ins}`;
           await sendTpl(tpl, "ta", [name, dateStr, ins], fb);
         } else if (kind === "quiz_sample") {
-          const sample =
-            `🎯 *வினாடி வினா — மாதிரி* (நாள் 1) 🚗🚦\n\n` +
-            `ஹெல்மெட் அணிவது ஏன் முக்கியம்?\n\n` +
-            `1️⃣ சட்டம்\n2️⃣ தலையைப் பாதுகாக்க\n3️⃣ அலங்காரம்\n\n` +
-            `_1, 2 அல்லது 3 என பதிலளிக்கவும் (சோதனை)_`;
-          await enqueueWaOutboundSend(
-            {
-              tenantId: tid,
-              to: raw,
-              message: sample,
-              messageType: "text",
-              metadata: { kind: "admin_template_test", test_kind: kind }
-            },
-            { delaySeconds: 0 }
-          );
+          const { getQuizBankRows } = require("./snapshotStore");
+          const { QUIZ_Q: QQ, resolveQuizCorrectChoiceNo } = require("../lib/quizRowUtils");
+          const rows = await getQuizBankRows();
+          let qRow = null;
+          for (const row of rows) {
+            if (Array.isArray(row) && parseInt(row[QQ.day], 10) === 1) {
+              qRow = row;
+              break;
+            }
+          }
+          if (!qRow && rows.length) qRow = rows[0];
+          const titlePrefix = "🧪 TEST QUIZ";
+          const optA = String((qRow && qRow[QQ.o1]) || "விடை A");
+          const optB = String((qRow && qRow[QQ.o2]) || "விடை B");
+          const optC = String((qRow && qRow[QQ.o3]) || "விடை C");
+          const qText = String((qRow && qRow[QQ.ques]) || "சோதனை வினா");
+          const bodyParam2 =
+            `${titlePrefix} - (நாள் 1) 🚗🚦\n\n${qText}\n\n` +
+            `1️⃣ ${optA}\n2️⃣ ${optB}\n3️⃣ ${optC}\n\n` +
+            `_சரியான விடையைத் தேர்ந்தெடுக்கவும் 👇_`;
+          const correctNo = qRow ? resolveQuizCorrectChoiceNo(qRow) : 2;
+          const tplQuiz = String(cfg.quizTemplate || "daily_quiz_btn").trim();
+          const fb =
+            `${titlePrefix}\n\n${qText}\n\n1️⃣ ${optA}\n2️⃣ ${optB}\n3️⃣ ${optC}\n\n(டெம்ப்ளேட் இல்லை எனில் உரை மட்டும் அனுப்பப்பட்டது.)`;
+          await sendTpl(tplQuiz, "ta", [name, bodyParam2], fb);
+
+          const phone10Quiz = normPhone10(raw);
+          const snapQ = await getBusinessSnapshotDoc("Nanban");
+          let stu = Array.isArray(snapQ.students) ? snapQ.students.map((x) => ({ ...x })) : [];
+          const stuIdx = stu.findIndex((s) => normPhone10(s.phone) === phone10Quiz);
+          if (stuIdx >= 0) {
+            const st = { ...stu[stuIdx] };
+            if (!Array.isArray(st.quizPendingQueue)) st.quizPendingQueue = [];
+            st.quizPendingQueue.push({ quizDay: 1, correctNo });
+            if (st.quizPendingQueue.length > 15) st.quizPendingQueue = st.quizPendingQueue.slice(-15);
+            stu[stuIdx] = st;
+            await saveNanbanPartial({ students: stu });
+          }
         } else if (kind === "chit_alert") {
           const tpl = cfg.chitDueTemplate || "chit_due_reminder";
           const fb = `சோதனை: சீட்டு நினைவூட்டல் — ${name}`;

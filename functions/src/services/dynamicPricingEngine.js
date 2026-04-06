@@ -216,6 +216,13 @@ function deriveSelectionFromInbound(inbound) {
   const pid = String(inbound?.interactive?.id || "").trim();
   const text = String(inbound?.interactive?.title || inbound?.text || "").trim();
 
+  if (/^QUIZ_/i.test(pid)) {
+    return { action: "noop", serviceKeys: [] };
+  }
+  if (/முதல் விடை|இரண்டாம் விடை|மூன்றாம் விடை/.test(text)) {
+    return { action: "noop", serviceKeys: [] };
+  }
+
   if (isGreetingInbound(pid, text)) {
     return { action: "welcome", serviceKeys: [DEFAULT_SERVICE] };
   }

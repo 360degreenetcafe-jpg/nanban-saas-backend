@@ -18,17 +18,47 @@ function coerceFirestoreArray(v) {
     }
   }
   if (typeof v === "object") {
+    // Wrapped shapes seen in exports / legacy writes
+    if (Array.isArray(v.items)) return coerceFirestoreArray(v.items);
+    if (Array.isArray(v.rows)) return coerceFirestoreArray(v.rows);
+    if (Array.isArray(v.list)) return coerceFirestoreArray(v.list);
     const keys = Object.keys(v);
     if (keys.length && keys.every((k) => /^\d+$/.test(k))) {
-      return keys.sort((a, b) => Number(a) - Number(b)).map((k) => v[k]);
+      return keys
+        .sort((a, b) => Number(a) - Number(b))
+        .map((k) => v[k])
+        .map((item) => {
+          if (item && typeof item === "object" && !Array.isArray(item)) return item;
+          if (typeof item === "string") {
+            try {
+              const p = JSON.parse(item);
+              return p && typeof p === "object" ? p : null;
+            } catch (_) {
+              return null;
+            }
+          }
+          return null;
+        })
+        .filter((item) => item != null);
     }
-    // Firestore map keyed by id (e.g. { "1734...": { id, name, ... }, ... })
-    const vals = Object.values(v);
-    if (
-      vals.length &&
-      vals.every((item) => item && typeof item === "object" && !Array.isArray(item))
-    ) {
-      return vals;
+    // Map keyed by id, or mixed maps: keep only object rows (one bad leaf must not wipe all rows).
+    const vals = Object.values(v).filter(
+      (item) => item && typeof item === "object" && !Array.isArray(item)
+    );
+    if (vals.length) return vals;
+    const stringRows = Object.values(v).filter((item) => typeof item === "string");
+    if (stringRows.length === keys.length && keys.length) {
+      const parsed = stringRows
+        .map((s) => {
+          try {
+            const p = JSON.parse(String(s).trim());
+            return p && typeof p === "object" ? p : null;
+          } catch (_) {
+            return null;
+          }
+        })
+        .filter(Boolean);
+      if (parsed.length) return parsed;
     }
   }
   return [];
@@ -68,8 +98,22 @@ function normalizeSnapshotDocForRead(businessName, raw) {
     }
     return data;
   }
-  data.students = coerceFirestoreArray(data.students);
-  data.expenses = coerceFirestoreArray(data.expenses);
+  const rawStu =
+    data.students !== undefined && data.students !== null
+      ? data.students
+      : data.Students !== undefined
+        ? data.Students
+        : data.studentList;
+  const rawExp =
+    data.expenses !== undefined && data.expenses !== null
+      ? data.expenses
+      : data.Expenses !== undefined
+        ? data.Expenses
+        : data.expenseList;
+  data.students = coerceFirestoreArray(rawStu);
+  data.expenses = coerceFirestoreArray(rawExp);
+  delete data.Students;
+  delete data.Expenses;
   if (data.chitData !== undefined && data.chitData !== null) {
     data.chitData = coerceChitData(data.chitData);
   }
