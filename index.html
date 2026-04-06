@@ -4386,95 +4386,83 @@
             </div>
 
             <div id="nanbanSettingsMenu" class="nanban-only">
+                <div class="glass-card" style="padding:25px; margin-bottom:20px; background:linear-gradient(to right, #ecfeff, #ffffff); border-left:8px solid #0891b2;">
+                    <h3 style="margin-top:0; color:var(--primary);">📣 Message Template Tester</h3>
+                    <p style="font-size:12px; color:var(--text-muted); margin:0 0 12px;">Queues the same WhatsApp templates the ERP uses (Firebase → Cloud Tasks). Default phone is yours; change if needed.</p>
+                    <label style="font-size:12px;">Your WhatsApp (10-digit India)</label>
+                    <input type="tel" inputmode="numeric" id="waTemplateTestPhone" placeholder="9XXXXXXXXX" maxlength="10" style="width:100%; margin:6px 0 14px; box-sizing:border-box;" autocomplete="off" oninput="this.value=this.value.replace(/\D/g,'').slice(0,10);">
+                    <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(170px,1fr)); gap:10px;">
+                        <button type="button" class="btn btn-p" style="padding:12px; font-size:12px;" onclick="sendWaTemplateTestKind_('welcome')">Welcome</button>
+                        <button type="button" class="btn btn-p" style="padding:12px; font-size:12px;" onclick="sendWaTemplateTestKind_('enquiry')">Inquiry</button>
+                        <button type="button" class="btn btn-p" style="padding:12px; font-size:12px;" onclick="sendWaTemplateTestKind_('fee_2w')">2W fee</button>
+                        <button type="button" class="btn btn-p" style="padding:12px; font-size:12px;" onclick="sendWaTemplateTestKind_('fee_4w')">4W fee</button>
+                        <button type="button" class="btn btn-p" style="padding:12px; font-size:12px;" onclick="sendWaTemplateTestKind_('llr_reminder')">LLR / RTO reminder</button>
+                        <button type="button" class="btn btn-p" style="padding:12px; font-size:12px;" onclick="sendWaTemplateTestKind_('quiz_sample')">Quiz sample</button>
+                        <button type="button" class="btn btn-p" style="padding:12px; font-size:12px;" onclick="sendWaTemplateTestKind_('chit_alert')">Chit alert</button>
+                        <button type="button" class="btn btn-p" style="padding:12px; font-size:12px;" onclick="sendWaTemplateTestKind_('day_close')">Day close</button>
+                    </div>
+                </div>
+
                 <div class="glass-card" style="padding:25px; margin-bottom:20px; background:linear-gradient(to right, #eff6ff, #ffffff); border-left:8px solid var(--secondary);">
-                <details>
-                    <summary style="cursor:pointer; font-weight:1000; color:var(--primary); font-size:14px; list-style:none;">🛠️ System Tools & Announcements</summary>
-                    <div style="margin-top:15px;">
-                        <div style="display:flex; gap:15px; flex-wrap:wrap; margin-bottom:15px;">
-                            <button class="btn btn-s" style="font-size:12px; padding:10px 15px;" onclick="syncOldStudents()">🔄 Sync Old Data</button>
-                            <button class="btn btn-p" style="font-size:12px; padding:10px 15px;" onclick="downloadExcel()">💾 Excel Backup</button>
-                        </div>
+                    <h3 style="margin-top:0; color:var(--primary); font-size:15px;">📝 Meta template names &amp; extras</h3>
+                    <p style="font-size:11px; color:var(--text-muted); margin:0 0 10px;">Saved to app settings (same as before). Day-close test can use optional <b>quizHeaderImageUrl</b> for a media header when your Meta template supports IMAGE header.</p>
+                    <input type="text" id="setTemplateEnquiry" placeholder="Enquiry template" style="margin:6px 0;">
+                    <input type="text" id="setTemplateWelcome" placeholder="Welcome / admission" style="margin:6px 0;">
+                    <input type="text" id="setTemplateLlrAdmission" placeholder="LLR admission" style="margin:6px 0;">
+                    <input type="text" id="setTemplateRtoReminder" placeholder="RTO reminder" style="margin:6px 0;">
+                    <input type="text" id="setTemplateRtoTomorrow" placeholder="RTO tomorrow" style="margin:6px 0;">
+                    <input type="text" id="setTemplateDailyClass" placeholder="Daily class" style="margin:6px 0;">
+                    <input type="text" id="setTemplateChitAuction" placeholder="Chit auction" style="margin:6px 0;">
+                    <input type="text" id="setTemplateChitDue" placeholder="Chit due" style="margin:6px 0;">
+                    <input type="text" id="setTemplateChitReceipt" placeholder="Chit receipt" style="margin:6px 0;">
+                    <input type="text" id="setTemplateBulk" placeholder="Bulk" style="margin:6px 0;">
+                    <input type="text" id="setInspectorTime" placeholder="Inspector time" style="margin:6px 0;">
+                    <input type="text" id="setBusinessUpi" placeholder="UPI ID" style="margin:6px 0;">
+                    <label style="font-weight:bold;display:block;margin-top:8px;">Partner WhatsApp</label>
+                    <input type="text" id="setPartnerPhone" placeholder="919092036666" style="margin:6px 0;">
+                    <input type="text" id="setGoogleReviewLink" placeholder="Google review URL" style="margin:6px 0;">
+                    <input type="text" id="setQuizHeaderImageUrl" placeholder="Optional: HTTPS image for template header tests" style="margin:6px 0;">
+                    <textarea id="setRtoReminderText" rows="3" placeholder="RTO reminder text ({name}, {date}, {time})" style="margin-top:8px;"></textarea>
+                    <button class="btn btn-s" style="width:100%; font-size:12px; padding:12px; margin-top:12px;" onclick="saveTestMessageSettings()">💾 Save template settings</button>
+                </div>
 
-                        <div style="background:#fffbeb; padding:20px; border-radius:12px; border:1px solid var(--warning); margin-bottom:15px;">
-                            <label style="color:var(--warning); font-size:14px; margin-bottom:10px; font-weight:900;">🚗 வண்டி சர்வீஸ் / KM டிராக்கர்</label>
-                            <div class="flex-row" style="align-items:flex-end;">
-                                <div>
-                                    <label>வண்டி இதுவரை ஓடியது (Total KM)</label>
-                                    <input type="number" id="setVehKmCurrent" style="font-weight:bold; color:var(--primary); margin:0;">
-                                </div>
-                                <div>
-                                    <label>அடுத்த சர்வீஸ் அலர்ட் (ஒவ்வொரு... KM-க்கும்)</label>
-                                    <input type="number" id="setVehKmTarget" placeholder="உதா: 5000" style="margin:0;">
-                                </div>
-                                <button class="btn btn-w" style="padding:15px;" onclick="saveVehicleKmSettings()">💾 KM அப்டேட் செய்</button>
-                            </div>
+                <div class="glass-card" style="padding:25px; margin-bottom:20px; background:linear-gradient(to right, #eff6ff, #ffffff); border-left:8px solid var(--secondary);">
+                    <h3 style="margin-top:0; color:var(--primary); font-size:15px;">🚗 Vehicle KM &amp; trainer</h3>
+                    <div class="flex-row" style="align-items:flex-end; flex-wrap:wrap; gap:10px;">
+                        <div>
+                            <label>Total KM</label>
+                            <input type="number" id="setVehKmCurrent" style="font-weight:bold; color:var(--primary); margin:0;">
                         </div>
-                        
-                        <div style="background:#f8fafc; padding:15px; border-radius:12px; border:1px solid #cbd5e1; margin-bottom:15px;">
-                            <label style="color:var(--primary);">👨‍🏫 பயிற்சியாளர் வாட்ஸ்அப் அலர்ட் எண்</label>
-                            <div style="display:flex; gap:10px;">
-                                <input type="tel" inputmode="numeric" pattern="[0-9]*" id="trainerAlertNum" placeholder="எ.கா: 9443225109" style="margin:0; flex:1;" maxlength="10" autocomplete="off" oninput="this.value=this.value.replace(/\D/g,'').slice(0,10);">
-                                <button class="btn btn-p" style="padding:10px 20px;" onclick="saveTrainerAlertNum()">Save Number</button>
-                            </div>
+                        <div>
+                            <label>Service alert every (KM)</label>
+                            <input type="number" id="setVehKmTarget" placeholder="5000" style="margin:0;">
                         </div>
-
-                        <div style="background:#ecfdf5; padding:15px; border-radius:12px; border:1px solid #6ee7b7; margin-bottom:15px;">
-                            <label style="color:var(--primary); font-weight:900;">☁️ Firebase native (no Apps Script)</label>
-                            <div style="font-size:11px; color:#065f46; margin:6px 0 10px;">Set the same value as Secret <b>NANBAN_WEB_WRITE_KEY</b> in Google Cloud (Firebase Functions). Data sync + enquiry/admission WhatsApp use this API.</div>
-                            <label style="font-size:12px;">Integration base URL</label>
-                            <input type="text" id="nanbanNativeApiBase" placeholder="https://asia-south1-...cloudfunctions.net/nanbanWebIntegration" style="margin:6px 0; width:100%; box-sizing:border-box;">
-                            <label style="font-size:12px;">Web write key</label>
-                            <input type="password" id="nanbanWebWriteKey" placeholder="Paste secret value" autocomplete="off" style="margin:6px 0; width:100%; box-sizing:border-box;">
-                            <button type="button" class="btn btn-p" style="width:100%; font-size:12px; padding:12px; margin-top:8px;" onclick="saveNanbanNativeSettings(); loadNanbanNativeSettingsToForm();">💾 Save native settings</button>
-                        </div>
-
-                        <div style="background:#f8fafc; padding:15px; border-radius:12px; border:1px solid #cbd5e1; margin-bottom:15px;">
-                            <label style="color:var(--primary);">🧩 Template Manager v2</label>
-                            <input type="text" id="setTemplateEnquiry" placeholder="enquiry template (eg: enquiry_welcom)" style="margin:8px 0;">
-                            <input type="text" id="setTemplateWelcome" placeholder="welcome template (eg: welcome_admission)" style="margin:8px 0;">
-                            <input type="text" id="setTemplateLlrAdmission" placeholder="LLR template (eg: welcome_admission)" style="margin:8px 0;">
-                            <input type="text" id="setTemplateRtoReminder" placeholder="RTO reminder template (eg: rto_test_reminder)" style="margin:8px 0;">
-                            <input type="text" id="setTemplateRtoTomorrow" placeholder="RTO tomorrow template (eg: rto_test_tomorrow)" style="margin:8px 0;">
-                            <input type="text" id="setTemplateDailyClass" placeholder="Daily class template (eg: daily_class_alert)" style="margin:8px 0;">
-                            <input type="text" id="setTemplateChitAuction" placeholder="Chit auction template (eg: chit_auction_alert)" style="margin:8px 0;">
-                            <input type="text" id="setTemplateChitDue" placeholder="Chit due template (eg: chit_due_reminder)" style="margin:8px 0;">
-                            <input type="text" id="setTemplateChitReceipt" placeholder="Chit receipt template (eg: chit_payment_receipt)" style="margin:8px 0;">
-                            <input type="text" id="setTemplateBulk" placeholder="Bulk template (eg: bulk_announcement)" style="margin:8px 0;">
-                            <input type="text" id="setInspectorTime" placeholder="Inspector time (eg: காலை 10:30)" style="margin:8px 0;">
-                            <input type="text" id="setBusinessUpi" placeholder="Business UPI ID (eg: 9942391870@oksbi)" style="margin:8px 0;">
-                    <label style="font-weight:bold;display:block;margin-top:10px;">Partner WhatsApp Number</label>
-                    <input type="text" id="setPartnerPhone" placeholder="Partner Phone (919092036666)" style="margin:8px 0;">
-                            <input type="text" id="setGoogleReviewLink" placeholder="Google Review Link (https://...)" style="margin:8px 0;">
-                            <textarea id="setRtoReminderText" rows="4" placeholder="RTO reminder custom text. Use {name}, {date}, {time} placeholders." style="margin-top:8px;"></textarea>
-                            <button class="btn btn-s" style="width:100%; font-size:12px; padding:12px; margin-top:10px;" onclick="saveTestMessageSettings()">💾 Save Template Settings</button>
-                            <button class="btn btn-p" style="width:100%; font-size:12px; padding:12px; margin-top:10px;" onclick="sendTemplateTestUI()">🧪 Send Template Test</button>
-                            <button class="btn btn-p" style="width:100%; font-size:12px; padding:12px; margin-top:10px; background:#0f172a;" onclick="validateTemplatesUI()">✅ Validate Templates</button>
-                            <button class="btn btn-p" style="width:100%; font-size:12px; padding:12px; margin-top:10px; background:#111827;" onclick="testAllTemplatesUI()">🧪 Test ALL (Testing Mode)</button>
-                        </div>
-
-                        <div style="background:#f8fafc; padding:15px; border-radius:12px; border:1px solid #cbd5e1;">
-                            <label style="color:var(--primary);">📢 Bulk Announcement (Send to All Students)</label>
-                            <textarea id="bulkMessageText" rows="3" placeholder="உதா: நாளை RTO அலுவலகம் விடுமுறை என்பதால் டெஸ்ட் நடைபெறாது..." style="margin-bottom:10px; font-size:13px;"></textarea>
-                            <button class="btn btn-d" style="width:100%; font-size:12px; padding:12px;" onclick="sendBulkAnnouncement()">🚀 Send WhatsApp to All Active Students</button>
-                        </div>
-
-                        <div style="background:#eff6ff; padding:15px; border-radius:12px; border:1px solid #bfdbfe; margin-top:15px;">
-                            <label style="color:var(--primary);">⏰ Automation (Cron)</label>
-                            <div style="display:flex; gap:10px; flex-wrap:wrap;">
-                                <button class="btn btn-p" style="font-size:12px; padding:10px 15px;" onclick="setupAllTriggersUI()">✅ Enable 8AM+8PM</button>
-                                <button class="btn btn-p" style="font-size:12px; padding:10px 15px; background:#0f172a;" onclick="runDailySummaryNowUI()">🚀 Run Summary Now</button>
-                                <button class="btn btn-w" style="font-size:12px; padding:10px 15px; background:var(--accent); color:white;" onclick="sendWeeklyQuizReports()">📊 Weekly Quiz Report</button>
-                                <button class="btn btn-w" style="font-size:12px; padding:10px 15px;" onclick="showTriggerStatusUI()">🧾 Trigger Status</button>
-                                <button class="btn btn-p" style="font-size:12px; padding:10px 15px; background:#8b5cf6; color:white;" onclick="runQuizDiagnosticsUI()">🔍 Quiz Diagnostics</button>
-                                <button class="btn btn-s" style="font-size:12px; padding:10px 15px; background:#16a34a; color:white;" onclick="resendTodayMessagesUI()">📨 இன்றைய மெசேஜ் அனுப்பு</button>
-                                <button class="btn btn-w" style="font-size:12px; padding:10px 15px; background:#6366f1; color:white; border:none;" onclick="checkWhatsAppConnectionUI()">🌐 Test Connection</button>
-                                <button class="btn btn-w" style="font-size:12px; padding:10px 15px; background:#f43f5e; color:white; border:none;" onclick="testAdminAlertUI()">🔔 Test Admin Alert</button>
-                                <button class="btn btn-s" style="font-size:12px; padding:10px 15px; background:#fbbf24; color:#0f172a; border:none;" onclick="resendTodayPassCertificatesUI()">🏆 Pass மெசேஜ் மீண்டும் அனுப்பு</button>
-                            </div>
-                            <div style="font-size:11px; font-weight:900; color:#1e3a8a; margin-top:10px;">Nightly report வரலனா இங்க “Run Summary Now” அழுத்தி உடனே பார்க்கலாம்.</div>
+                        <button class="btn btn-w" style="padding:15px;" onclick="saveVehicleKmSettings()">💾 Save KM</button>
+                    </div>
+                    <div style="margin-top:18px;">
+                        <label>Trainer WhatsApp alert</label>
+                        <div style="display:flex; gap:10px; margin-top:6px;">
+                            <input type="tel" inputmode="numeric" id="trainerAlertNum" placeholder="10-digit" style="margin:0; flex:1;" maxlength="10" autocomplete="off" oninput="this.value=this.value.replace(/\D/g,'').slice(0,10);">
+                            <button class="btn btn-p" style="padding:10px 20px;" onclick="saveTrainerAlertNum()">Save</button>
                         </div>
                     </div>
-                </details>
+                </div>
+
+                <div class="glass-card" style="padding:25px; margin-bottom:20px; background:#ecfdf5; border-left:8px solid #6ee7b7;">
+                    <h3 style="margin-top:0; color:var(--primary); font-size:15px;">☁️ Firebase web integration</h3>
+                    <p style="font-size:11px; color:#065f46; margin:0 0 10px;">Must match Secret <b>NANBAN_WEB_WRITE_KEY</b> in Google Cloud.</p>
+                    <label style="font-size:12px;">Base URL</label>
+                    <input type="text" id="nanbanNativeApiBase" placeholder="https://...nanbanWebIntegration" style="margin:6px 0; width:100%; box-sizing:border-box;">
+                    <label style="font-size:12px;">Write key</label>
+                    <input type="password" id="nanbanWebWriteKey" placeholder="Secret" autocomplete="off" style="margin:6px 0; width:100%; box-sizing:border-box;">
+                    <button type="button" class="btn btn-p" style="width:100%; font-size:12px; padding:12px; margin-top:8px;" onclick="saveNanbanNativeSettings(); loadNanbanNativeSettingsToForm();">💾 Save</button>
+                </div>
+
+                <div class="glass-card" style="padding:15px; margin-bottom:20px; border:1px solid #cbd5e1;">
+                    <label style="color:var(--primary); font-weight:800;">📢 Bulk announcement</label>
+                    <textarea id="bulkMessageText" rows="3" placeholder="Message to all active students..." style="margin:10px 0; font-size:13px;"></textarea>
+                    <button class="btn btn-d" style="width:100%; font-size:12px; padding:12px;" onclick="sendBulkAnnouncement()">Send (legacy)</button>
+                </div>
             </div>
 
             <div class="flex-row">
@@ -12169,7 +12157,14 @@
         setVal('setBusinessUpi', appSettings.appSettings.businessUpi || '');
         setVal('setGoogleReviewLink', appSettings.appSettings.googleReviewLink || '');
         setVal('setRtoReminderText', appSettings.appSettings.rtoReminderText || '');
+        setVal('setQuizHeaderImageUrl', appSettings.appSettings.quizHeaderImageUrl || '');
         setVal('trainerAlertNum', appSettings.appSettings.trainerAlertPhone || '');
+        (function() {
+            var wtp = document.getElementById('waTemplateTestPhone');
+            if (wtp && !String(wtp.value || '').trim() && typeof currentUserPhone !== 'undefined' && currentUserPhone) {
+                wtp.value = String(currentUserPhone).replace(/\D/g, '').slice(-10);
+            }
+        })();
         toggleFinType(getVal('expFinType') || 'expense');
         populateESevaiSettings();
     }
@@ -12484,237 +12479,37 @@
         appSettings.appSettings.whyNanbanText = getVal('setWhyNanbanText') || '';
         appSettings.appSettings.googleReviewLink = getVal('setGoogleReviewLink') || '';
         appSettings.appSettings.rtoReminderText = getVal('setRtoReminderText') || '';
+        appSettings.appSettings.quizHeaderImageUrl = getVal('setQuizHeaderImageUrl') || '';
         google.script.run.saveAppSettings("appSettings", appSettings.appSettings);
         showToast("Test message settings saved");
     }
 
-    function sendTemplateTestUI() {
-        let t = prompt("Template name to test (exact):", getVal('setTemplateWelcome') || "welcome_admission");
-        if (!t) return;
-        let p = prompt("Send to phone (10-digit):", currentUserPhone || "");
-        if (!p) return;
-        showLoader("Sending template test...");
-        google.script.run
-            .withSuccessHandler(function(res) { hideLoader(); showToast(res && res.msg ? res.msg : "Template test sent"); })
-            .withFailureHandler(function() { hideLoader(); showToast("Template test failed", "danger"); })
-            .sendTemplateTestAction(t, p);
+    function sendWaTemplateTestKind_(kind) {
+        var el = document.getElementById('waTemplateTestPhone');
+        var p = el ? String(el.value || '').replace(/\D/g, '') : '';
+        if (p.length !== 10) {
+            showToast('Enter your 10-digit WhatsApp number', 'danger');
+            return;
+        }
+        if (typeof nanbanNativeConfigured_ === 'function' && !nanbanNativeConfigured_()) {
+            showToast('Set Firebase integration URL + write key above first', 'warning');
+            return;
+        }
+        showLoader('Queueing WhatsApp test...');
+        apiCall_('testWaTemplatePreview', kind, p)
+            .then(function(res) {
+                hideLoader();
+                if (res && res.status === 'success') showToast(res.message || 'Queued', 'success');
+                else showToast((res && res.message) ? res.message : 'Failed', 'danger');
+            })
+            .catch(function(e) {
+                hideLoader();
+                showToast(String(e && e.message ? e.message : e), 'danger');
+            });
     }
-
-    function validateTemplatesUI() {
-        showLoader("Validating templates...");
-        google.script.run
-            .withSuccessHandler(function(res) {
-                hideLoader();
-                if (!res || res.status !== 'success') {
-                    showToast("Validate failed", "danger");
-                    return;
-                }
-                let items = res.items || [];
-                let warnings = res.warnings || [];
-                let rows = items.map(function(it) {
-                    let c = it.ok ? "var(--success)" : "var(--danger)";
-                    let icon = it.ok ? "✅" : "❌";
-                    return `<div style="display:flex; justify-content:space-between; gap:10px; padding:10px 8px; border-bottom:1px dashed var(--border);">
-                        <div>
-                            <div style="font-weight:1000; color:var(--primary);">${icon} ${it.label}</div>
-                            <div style="font-size:11px; color:var(--text-muted); font-weight:900;">${it.key}</div>
-                        </div>
-                        <div style="font-weight:1000; color:${c}; overflow-wrap:anywhere; word-break:break-word; text-align:right; max-width:55%;">${it.value || '-'}</div>
-                    </div>`;
-                }).join('');
-                let warnHtml = warnings.map(w => `<div style="background:#fffbeb; border:1px solid #fde68a; padding:10px 12px; border-radius:12px; font-weight:900; color:#92400e; margin-bottom:10px;">⚠️ ${w}</div>`).join('');
-                setHTML('dashPopupTitle', "✅ Template Validation");
-                setHTML('dashPopupBody', warnHtml + `<div style="max-height:65vh; overflow:auto;">${rows || "<div style='padding:12px; color:gray; font-weight:900;'>No data</div>"}</div>`);
-                showModal('dashPopupModal');
-            })
-            .withFailureHandler(function() {
-                hideLoader();
-                showToast("Validate failed", "danger");
-            })
-            .validateTemplateSettingsAction();
-    }
-
-    function testAllTemplatesUI() {
-        let p = prompt("Send ALL template tests to phone (10-digit):", currentUserPhone || "");
-        if (!p) return;
-        showLoader("Sending ALL template tests...");
-        google.script.run
-            .withSuccessHandler(function(res) {
-                hideLoader();
-                if (!res || res.status !== 'success') {
-                    showToast((res && res.message) ? res.message : "Test failed", "danger");
-                    return;
-                }
-                let results = res.results || [];
-                let html = results.map(function(r) {
-                    let ok = (r.status === 'success');
-                    return `<div style="display:flex; justify-content:space-between; gap:10px; padding:10px 8px; border-bottom:1px dashed var(--border);">
-                        <div style="font-weight:1000; color:var(--primary);">${r.template}</div>
-                        <div style="font-weight:1000; color:${ok ? 'var(--success)' : 'var(--danger)'};">${ok ? 'OK' : 'ERR'}</div>
-                    </div>`;
-                }).join('');
-                setHTML('dashPopupTitle', "🧪 Test ALL Templates");
-                setHTML('dashPopupBody', `<div style="padding:10px; background:#f8fafc; border:1px solid var(--border); border-radius:12px; font-weight:1000; color:var(--primary); margin-bottom:10px;">Sent: ${res.count || results.length}</div><div style="max-height:65vh; overflow:auto;">${html || renderEmpty()}</div>`);
-                showModal('dashPopupModal');
-            })
-            .withFailureHandler(function() {
-                hideLoader();
-                showToast("Test failed", "danger");
-            })
-            .sendAllTemplateTestsAction(p, currentUserName);
-    }
-
-    function setupAllTriggersUI() {
-        showLoader("Enabling triggers...");
-        google.script.run
-            .withSuccessHandler(function(res) {
-                hideLoader();
-                if (res && res.status === 'success') showToast("Triggers enabled", "success");
-                else showToast((res && res.message) ? res.message : "Failed", "danger");
-            })
-            .withFailureHandler(function() {
-                hideLoader();
-                showToast("Failed", "danger");
-            })
-            .setupAllDailyTriggers();
-    }
-
-    function runDailySummaryNowUI() {
-        showLoader("Running summary...");
-        google.script.run
-            .withSuccessHandler(function(res) {
-                hideLoader();
-                if (res && res.status === 'success') showToast("Summary sent", "success");
-                else showToast((res && res.message) ? res.message : "Failed", "danger");
-            })
-            .withFailureHandler(function() {
-                hideLoader();
-                showToast("Failed", "danger");
-            })
-            .runDailyAdminSummaryNowAction(currentUserName);
-    }
-
-    function getTriggerStatusAction() {
-        showTriggerStatusUI();
-    }
-
-    function runQuizDiagnosticsUI() {
-        showLoader("Running Diagnostics...");
-        google.script.run
-            .withSuccessHandler(function(res) {
-                hideLoader();
-                if (!res || res.status !== 'success') return showToast("Diagnostics Failed", "danger");
-                
-                let stats = res.stats || {};
-                let warnings = res.warnings || [];
-                
-                let warnHtml = warnings.map(w => `<div style="background:#fffbeb; border:1px solid #fde68a; padding:10px 12px; border-radius:12px; font-weight:900; color:#92400e; margin-bottom:10px;">⚠️ ${w}</div>`).join('');
-                
-                let html = `
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:15px;">
-                        <div style="background:#f1f5f9; padding:15px; border-radius:12px; text-align:center;">
-                            <div style="font-size:10px; font-weight:800; color:#64748b;">TOTAL QUESTIONS</div>
-                            <div style="font-size:24px; font-weight:900; color:var(--primary);">${stats.totalQuestions || 0}</div>
-                        </div>
-                        <div style="background:#f1f5f9; padding:15px; border-radius:12px; text-align:center;">
-                            <div style="font-size:10px; font-weight:800; color:#64748b;">CATEGORIES</div>
-                            <div style="font-size:24px; font-weight:900; color:var(--secondary);">${stats.categoriesCount || 0}</div>
-                        </div>
-                    </div>
-                    <div style="font-weight:900; color:var(--primary); margin-bottom:10px; font-size:14px;">Category Summary:</div>
-                    <div style="background:#f8fafc; padding:10px; border-radius:12px; font-size:12px;">
-                        ${Object.entries(stats.categoryBreakdown || {}).map(([cat, count]) => `
-                            <div style="display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px dashed #e2e8f0;">
-                                <span style="font-weight:700;">${cat}</span>
-                                <span style="font-weight:900; color:var(--secondary);">${count} Qs</span>
-                            </div>
-                        `).join('')}
-                    </div>
-                `;
-                
-                setHTML('dashPopupTitle', "📊 Quiz System Diagnostics");
-                setHTML('dashPopupBody', warnHtml + html);
-                showModal('dashPopupModal');
-            })
-            .withFailureHandler(function(err) {
-                hideLoader();
-                showToast("Error: " + err.message, "danger");
-            })
-            .runQuizDiagnosticsAction();
-    }
-
-    function resendTodayMessagesUI() {
-        if (!confirm("இன்றைய பதிவுகள் அனைத்திற்கும் மீண்டும் மெசேஜ் அனுப்பலாமா?")) return;
-        showLoader("அனுப்பப்படுகிறது...");
-        google.script.run
-            .withSuccessHandler(function(res) {
-                hideLoader();
-                if (res && res.status === 'success') showToast(res.msg, "success");
-                else showToast((res && res.message) ? res.message : "தோல்வி", "danger");
-            })
-            .withFailureHandler(function() {
-                hideLoader();
-                showToast("தொடர்பு கொள்ள முடியவில்லை", "danger");
-            })
-            .resendTodayMessagesAction(currentUserName);
-    }
-
-    function checkWhatsAppConnectionUI() {
-        showLoader("Checking connection...");
-        google.script.run
-            .withSuccessHandler(function(res) {
-                hideLoader();
-                if (res && res.status === 'success') {
-                    showToast(res.message, "success");
-                    confirm("Connection Success! Admin-களுக்கு ஒரு டெஸ்ட் மெசேஜ் அனுப்பலாமா?") && testAdminAlertUI();
-                } else {
-                    showToast((res && res.message) ? res.message : "FAILED", "danger");
-                    setHTML('dashPopupTitle', "❌ WhatsApp Connection Error");
-                    setHTML('dashPopupBody', `<div style="padding:15px; color:var(--danger); font-weight:1000;">${res.message || 'Unknown Error'}</div><div style="padding:0 15px 15px; font-size:12px; color:gray;">Please generate a new token from Facebook Developers and update it in 'gode.gs.txt' file.</div>`);
-                    showModal('dashPopupModal');
-                }
-            })
-            .withFailureHandler(function() {
-                hideLoader();
-                showToast("Request Failed", "danger");
-            })
-            .checkWhatsAppConnectionAction();
-    }
-
-    function testAdminAlertUI() {
-        showLoader("Sending Admin Test...");
-        google.script.run
-            .withSuccessHandler(function(res) {
-                hideLoader();
-                if (res && res.status === 'success') showToast("Admin Alert Sent!", "success");
-                else showToast("Failed to send alert", "danger");
-            })
-            .withFailureHandler(function() { hideLoader(); showToast("Error", "danger"); })
-            .testAdminNotificationAction();
-    }
-
-    function resendTodayPassCertificatesUI() {
-        if (!confirm("இன்று தேர்ச்சி பெற்ற அனைவருக்கும் மீண்டும் சர்டிபிகேட் அனுப்பலாமா?")) return;
-        showLoader("அனுப்பப்படுகிறது...");
-        google.script.run
-            .withSuccessHandler(function(res) {
-                hideLoader();
-                if (res && res.status === 'success') showToast(res.msg, "success");
-                else showToast((res && res.message) ? res.message : "தோல்வி", "danger");
-            })
-            .withFailureHandler(function() {
-                hideLoader();
-                showToast("தொடர்பு கொள்ள முடியவில்லை", "danger");
-            })
-            .resendTodayPassCertificatesAction(currentUserName);
-    }
-
-
-
 
 
     function sendBulkAnnouncement() { let m = getVal('bulkMessageText'); if(!m) return; if (!confirm("அனைத்து மாணவர்களுக்கும் இந்த அறிவிப்பை அனுப்பலாமா?")) return; showLoader("Sending..."); google.script.run.withSuccessHandler(function(r) { hideLoader(); showToast(r.msg); setVal('bulkMessageText', ''); }).sendBulkMessageAction(m); }
-    function syncOldStudents() { showLoader("Syncing..."); google.script.run.withSuccessHandler(function(r) { hideLoader(); showToast(r.msg); loadDatabase(); }).syncOldStudentsData(); }
     function downloadExcel() { let c = "data:text/csv;charset=utf-8,ID,Date,Name,Phone,Type,Service,Total Fee,Advance,Balance,Status,Classes Attended\n"; if(studentsData) { studentsData.forEach(function(s) { let bal = (parseInt(s.totalFee)||0) - (parseInt(s.advance)||0) - (parseInt(s.discount)||0); c += `${s.id},${s.dateJoined},${s.name},${s.phone},${s.type},${s.service},${s.totalFee},${s.advance},${bal},${s.status},${s.classesAttended}\n`; }); } let link = document.createElement("a"); link.setAttribute("href", encodeURI(c)); link.setAttribute("download", "Nanban_Backup.csv"); document.body.appendChild(link); link.click(); document.body.removeChild(link); }
 
     // =========================================================

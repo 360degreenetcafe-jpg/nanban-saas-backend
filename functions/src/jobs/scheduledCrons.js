@@ -5,7 +5,8 @@ const {
   getQuizBankRows,
   getRuntimeDoc
 } = require("../services/snapshotStore");
-const { enqueueWaOutboundSend } = require("../services/waOutboundQueue");
+const { enqueueWaOutboundSend, isUsableWaMediaUrl } = require("../services/waOutboundQueue");
+const { QUIZ_Q: Q, resolveQuizCorrectChoiceNo } = require("../lib/quizRowUtils");
 const { notifyAdminsText } = require("../services/adminNotify");
 const {
   getISTDateString,
@@ -17,7 +18,6 @@ const {
 } = require("../lib/istTime");
 
 const TENANT_DEFAULT = "nanban_main";
-const Q = { cat: 0, day: 1, ques: 2, o1: 3, o2: 4, o3: 5, ansText: 6, img: 7 };
 
 function shuffleInPlace(arr) {
   const a = Array.isArray(arr) ? arr : [];
@@ -88,84 +88,120 @@ async function runNanbanDailyMorning(opts = {}) {
       if (s.status === "Deleted") continue;
 
       if (s.status !== "License_Completed" && quizData.length > 0) {
-        const srv = String(s.service || "").toLowerCase();
         const quizIdx = getQuizDayByJoinDate(s);
-        const targetCats = [];
-        if (srv.includes("2 வீலர்") || srv.includes("2w")) targetCats.push("2W");
-        else if (srv.includes("4 வீலர்") || srv.includes("4w")) targetCats.push("4W");
-        else if (srv.includes("combo") || srv.includes("duo")) targetCats.push(quizIdx % 2 === 0 ? "4W" : "2W");
-        if (targetCats.length === 0) targetCats.push("General");
+        if (quizIdx >= 1 && quizIdx <= 30) {
+          const srv = String(s.service || "").toLowerCase();
+          const targetCats = [];
+          if (srv.includes("2 வீலர்") || srv.includes("2w")) targetCats.push("2W");
+          else if (srv.includes("4 வீலர்") || srv.includes("4w")) targetCats.push("4W");
+          else if (srv.includes("combo") || srv.includes("duo")) targetCats.push(quizIdx % 2 === 0 ? "4W" : "2W");
+          if (targetCats.length === 0) targetCats.push("General");
 
-        const todayQuestions = [];
-        for (let ri = 0; ri < quizData.length; ri++) {
-          const row = quizData[ri];
-          if (!Array.isArray(row) || row.length < 6) continue;
-          const rowCat = String(row[Q.cat] || "").trim();
-          const rowDay = parseInt(row[Q.day], 10);
-          if (rowDay === quizIdx && (targetCats.includes(rowCat) || rowCat === "General")) {
-            todayQuestions.push({ row, index: ri + 1 });
+          const todayQuestions = [];
+          for (let ri = 0; ri < quizData.length; ri++) {
+            const row = quizData[ri];
+            if (!Array.isArray(row) || row.length < 6) continue;
+            const rowCat = String(row[Q.cat] || "").trim();
+            const rowDay = parseInt(row[Q.day], 10);
+            if (rowDay === quizIdx && (targetCats.includes(rowCat) || rowCat === "General")) {
+              todayQuestions.push({ row, index: ri + 1 });
+            }
           }
-        }
 
-        todayQuestions.sort((a, b) => {
-          const catA = String(a.row[Q.cat] || "").trim();
-          const catB = String(b.row[Q.cat] || "").trim();
-          if (targetCats.includes(catA) && !targetCats.includes(catB)) return -1;
-          if (!targetCats.includes(catA) && targetCats.includes(catB)) return 1;
-          return 0;
-        });
-        shuffleInPlace(todayQuestions);
+          todayQuestions.sort((a, b) => {
+            const catA = String(a.row[Q.cat] || "").trim();
+            const catB = String(b.row[Q.cat] || "").trim();
+            if (targetCats.includes(catA) && !targetCats.includes(catB)) return -1;
+            if (!targetCats.includes(catA) && targetCats.includes(catB)) return 1;
+            return 0;
+          });
+          shuffleInPlace(todayQuestions);
 
-        const wa = waE164(s.phone);
-        for (let q = 0; q < todayQuestions.length && q < 3; q++) {
-          const qRow = todayQuestions[q].row;
-          const titlePrefix =
-            String(qRow[Q.cat] || "").trim() === "General" ? "🚦 பொது விழிப்புணர்வு" : "🎯 இன்றைய விசேஷ வினா";
-          const optA = String(qRow[Q.o1] || "");
-          const optB = String(qRow[Q.o2] || "");
-          const optC = String(qRow[Q.o3] || "");
-          const qText = String(qRow[Q.ques] || "");
-          const msg =
-            `${titlePrefix} - (நாள் ${quizIdx}) 🚗🚦\n\n${qText}\n\n1️⃣ ${optA}\n2️⃣ ${optB}\n3️⃣ ${optC}\n\n_சரியான விடையைத் தேர்ந்தெடுக்கவும்_ 👇`;
-          if (wa) {
-            await enqueueWaOutboundSend(
-              {
-                tenantId,
-                to: wa,
-                message: msg,
-                messageType: "text",
-                metadata: { kind: "daily_quiz", student_id: String(s.id), quiz_day: quizIdx }
-              },
-              { delaySeconds: bumpDelay(3) }
-            );
+          const wa = waE164(s.phone);
+          for (let q = 0; q < todayQuestions.length && q < 3; q++) {
+            const qRow = todayQuestions[q].row;
+            const titlePrefix =
+              String(qRow[Q.cat] || "").trim() === "General" ? "🚦 பொது விழிப்புணர்வு" : "🎯 இன்றைய விசேஷ வினா";
+            const optA = String(qRow[Q.o1] || "");
+            const optB = String(qRow[Q.o2] || "");
+            const optC = String(qRow[Q.o3] || "");
+            const qText = String(qRow[Q.ques] || "");
+            const imgUrl = String(qRow[Q.img] || "").trim();
+            const msg =
+              `${titlePrefix} - (நாள் ${quizIdx}) 🚗🚦\n\n${qText}\n\n1️⃣ ${optA}\n2️⃣ ${optB}\n3️⃣ ${optC}\n\n_சரியான விடையைத் தேர்ந்தெடுக்கவும் (1, 2 அல்லது 3) 👇_`;
+
+            if (!Array.isArray(s.quizPendingQueue)) s.quizPendingQueue = [];
+            s.quizPendingQueue.push({
+              quizDay: quizIdx,
+              correctNo: resolveQuizCorrectChoiceNo(qRow)
+            });
+            if (s.quizPendingQueue.length > 15) s.quizPendingQueue = s.quizPendingQueue.slice(-15);
+            students[i] = s;
+
+            if (wa) {
+              if (isUsableWaMediaUrl(imgUrl)) {
+                await enqueueWaOutboundSend(
+                  {
+                    tenantId,
+                    to: wa,
+                    message: "",
+                    messageType: "image",
+                    imageLink: imgUrl,
+                    imageCaption: `${titlePrefix} · நாள் ${quizIdx}`,
+                    metadata: {
+                      kind: "daily_quiz_image",
+                      student_id: String(s.id),
+                      quiz_day: quizIdx,
+                      quiz_row: todayQuestions[q].index
+                    }
+                  },
+                  { delaySeconds: bumpDelay(2) }
+                );
+              }
+              await enqueueWaOutboundSend(
+                {
+                  tenantId,
+                  to: wa,
+                  message: msg,
+                  messageType: "text",
+                  metadata: {
+                    kind: "daily_quiz",
+                    student_id: String(s.id),
+                    quiz_day: quizIdx,
+                    quiz_row: todayQuestions[q].index
+                  }
+                },
+                { delaySeconds: bumpDelay(3) }
+              );
+            }
           }
-        }
 
-        if (quizIdx > 1 && wa) {
-          const prevIdx = quizIdx - 1;
-          for (const row of quizData) {
-            if (!Array.isArray(row)) continue;
-            const cat = String(row[Q.cat] || "").trim();
-            if (!(targetCats.includes(cat) || cat === "General")) continue;
-            if (parseInt(row[Q.day], 10) !== prevIdx) continue;
-            const correctAns = String(row[Q.ansText] || "").trim();
-            const exp = row[8] ? String(row[8]) : "பாதுகாப்பாக ஓட்டுங்கள்!";
-            const revealMsg = `✅ *நேற்றைய விடை (${cat}):*\n\n❓ ${row[Q.ques]}\n✔️ *விடை: ${correctAns}*\n💡 *விளக்கம்:* ${exp}`;
-            await enqueueWaOutboundSend(
-              {
-                tenantId,
-                to: wa,
-                message: revealMsg,
-                messageType: "text",
-                metadata: { kind: "quiz_reveal", student_id: String(s.id) }
-              },
-              { delaySeconds: bumpDelay(1) }
-            );
+          if (quizIdx > 1 && wa) {
+            const prevIdx = quizIdx - 1;
+            for (const row of quizData) {
+              if (!Array.isArray(row)) continue;
+              const cat = String(row[Q.cat] || "").trim();
+              if (!(targetCats.includes(cat) || cat === "General")) continue;
+              if (parseInt(row[Q.day], 10) !== prevIdx) continue;
+              const correctAns = String(row[Q.ansText] || "").trim();
+              const exp = row[8] ? String(row[8]) : "பாதுகாப்பாக ஓட்டுங்கள்!";
+              const revealMsg = `✅ *நேற்றைய விடை (${cat}):*\n\n❓ ${row[Q.ques]}\n✔️ *விடை: ${correctAns}*\n💡 *விளக்கம்:* ${exp}`;
+              await enqueueWaOutboundSend(
+                {
+                  tenantId,
+                  to: wa,
+                  message: revealMsg,
+                  messageType: "text",
+                  metadata: { kind: "quiz_reveal", student_id: String(s.id) }
+                },
+                { delaySeconds: bumpDelay(1) }
+              );
+            }
           }
-        }
 
-        s.quizDay = quizIdx + 1;
-        students[i] = s;
+          s.quizDay = quizIdx + 1;
+          students[i] = s;
+        }
       }
 
       if (s.status === "License_Completed" && s.dateJoined) {

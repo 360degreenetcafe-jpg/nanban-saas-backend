@@ -7,7 +7,7 @@ const {
   setRuntimeDoc
 } = require("./snapshotStore");
 const { notifyAdminsText } = require("./adminNotify");
-const { enqueueWaOutboundSend } = require("./waOutboundQueue");
+const { enqueueWaOutboundSend, isUsableWaMediaUrl } = require("./waOutboundQueue");
 const { inferJobKindFromStudent } = require("./waNativeJobProcessor");
 const {
   normalizeChit,
@@ -1824,6 +1824,126 @@ async function handleErpRpc(action, rawArgs) {
           message:
             "PDF reports are not generated on Firebase (legacy GAS used Google Drive). Export data from Firestore or reintroduce a PDF Cloud Function later."
         };
+
+      case "testWaTemplatePreview": {
+        const { sanitizeTemplateParamText } = require("../lib/sanitizeTemplateParam");
+        const { getTenantWaTemplateRegistry } = require("./waTemplateConfig");
+        const {
+          normalizeServiceKey,
+          buildEnquiryWelcomTwoParams,
+          buildEnquiryStyleTemplateParams
+        } = require("./dynamicPricingEngine");
+
+        const kind = String(args[0] || "").trim();
+        let raw = String(args[1] || "").replace(/\D/g, "");
+        if (raw.length === 10) raw = `91${raw}`;
+        if (raw.length < 12) return { status: "error", message: "Enter valid 10-digit mobile" };
+
+        const snap = await getBusinessSnapshotDoc("Nanban");
+        const cfg = nanbanTemplateCfg_(snap);
+        const name = "சோதனை மாணவர்";
+        const dateStr = getISTDateString();
+        const tid = tenantId || TENANT_DEFAULT;
+
+        const sendTpl = async (tplName, lang, bodyParams, fallbackText) => {
+          const nm = String(tplName || "").trim();
+          const bp = (bodyParams || []).map((p) => sanitizeTemplateParamText(p));
+          await enqueueWaOutboundSend(
+            {
+              tenantId: tid,
+              to: raw,
+              message: String(fallbackText || ""),
+              messageType: nm ? "template_with_text_fallback" : "text",
+              template: nm
+                ? { name: nm, languageCode: lang || "ta", bodyParams: bp, tryFirst: true }
+                : null,
+              metadata: { kind: "admin_template_test", test_kind: kind }
+            },
+            { delaySeconds: 0 }
+          );
+        };
+
+        if (kind === "welcome") {
+          const tpl = cfg.welcomeTemplate || "welcome_admission";
+          const line = "2 வீலர் லைசென்ஸ் அட்மிஷன்";
+          const fb =
+            `வாழ்த்துக்கள் ${name}! 🎉\nஅட்மிஷன் பதிவு (சோதனை). தேதி: ${dateStr}\nமொத்தம் ₹15000 · முன்பணம் ₹5000 · மீதம் ₹10000`;
+          await sendTpl(tpl, "ta", [name, line, dateStr, "15000", "5000", "10000"], fb);
+        } else if (kind === "enquiry") {
+          const reg = await getTenantWaTemplateRegistry(tid);
+          const slots = reg.enquiry.bodyParamCount;
+          const selected = [normalizeServiceKey("2 வீலர்")];
+          let bodyParams;
+          if (slots === 4) bodyParams = buildEnquiryStyleTemplateParams(selected, name);
+          else if (slots === 2) bodyParams = buildEnquiryWelcomTwoParams(selected, name);
+          else bodyParams = [name];
+          const tplName = String(reg.enquiry.name || cfg.enquiryTemplate || "enquiry_welcom").trim();
+          const fb = `வணக்கம் ${name}! 🙏 விசாரணை பதிவு (சோதனை).`;
+          await sendTpl(tplName, reg.enquiry.language || "ta", bodyParams, fb);
+        } else if (kind === "fee_2w") {
+          const tpl = cfg.welcomeTemplate || "welcome_admission";
+          const line = "2 வீலர் லைசென்ஸ் அட்மிஷன்";
+          const fb = `சோதனை: ${line} · மீதம் ₹8000`;
+          await sendTpl(tpl, "ta", [name, line, dateStr, "12000", "4000", "8000"], fb);
+        } else if (kind === "fee_4w") {
+          const tpl = cfg.welcomeTemplate || "welcome_admission";
+          const line = "4 வீலர் லைசென்ஸ் அட்மிஷன்";
+          const fb = `சோதனை: ${line} · மீதம் ₹12000`;
+          await sendTpl(tpl, "ta", [name, line, dateStr, "20000", "8000", "12000"], fb);
+        } else if (kind === "llr_reminder") {
+          const tpl = cfg.rtoReminderTemplate || "rto_test_reminder";
+          const ins = String(cfg.inspectorTime || "காலை 10:30");
+          const fb = `வணக்கம் ${name}! RTO டெஸ்ட் நினைவூட்டல் (சோதனை). ${dateStr} ${ins}`;
+          await sendTpl(tpl, "ta", [name, dateStr, ins], fb);
+        } else if (kind === "quiz_sample") {
+          const sample =
+            `🎯 *வினாடி வினா — மாதிரி* (நாள் 1) 🚗🚦\n\n` +
+            `ஹெல்மெட் அணிவது ஏன் முக்கியம்?\n\n` +
+            `1️⃣ சட்டம்\n2️⃣ தலையைப் பாதுகாக்க\n3️⃣ அலங்காரம்\n\n` +
+            `_1, 2 அல்லது 3 என பதிலளிக்கவும் (சோதனை)_`;
+          await enqueueWaOutboundSend(
+            {
+              tenantId: tid,
+              to: raw,
+              message: sample,
+              messageType: "text",
+              metadata: { kind: "admin_template_test", test_kind: kind }
+            },
+            { delaySeconds: 0 }
+          );
+        } else if (kind === "chit_alert") {
+          const tpl = cfg.chitDueTemplate || "chit_due_reminder";
+          const fb = `சோதனை: சீட்டு நினைவூட்டல் — ${name}`;
+          await sendTpl(tpl, "ta", [name, "1 லட்சம் சீட்டு குழு"], fb);
+        } else if (kind === "day_close") {
+          const tpl = cfg.dayCloseTemplate || "day_close_report";
+          const sampleReport =
+            `🏁 *DAY CLOSE (சோதனை)*\n📅 ${dateStr}\n🚗 KM: 25\n💰 வசூல்: ₹5000\n🔴 செலவு: ₹200\n🤝 ஒப்படைப்பு: ₹4800`;
+          const headerImg = String(cfg.quizHeaderImageUrl || "").trim();
+          const tPayload = {
+            name: tpl,
+            languageCode: "ta",
+            bodyParams: [sanitizeTemplateParamText(sampleReport)],
+            tryFirst: true
+          };
+          if (isUsableWaMediaUrl(headerImg)) tPayload.headerImageLink = headerImg;
+          await enqueueWaOutboundSend(
+            {
+              tenantId: tid,
+              to: raw,
+              message: sampleReport,
+              messageType: "template_with_text_fallback",
+              template: tPayload,
+              metadata: { kind: "admin_template_test", test_kind: kind }
+            },
+            { delaySeconds: 0 }
+          );
+        } else {
+          return { status: "error", message: `Unknown test kind: ${kind}` };
+        }
+
+        return { status: "success", message: `Queued WhatsApp test: ${kind}` };
+      }
 
       case "uploadFileToDrive":
       case "processFileUpload":

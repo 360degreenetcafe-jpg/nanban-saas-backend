@@ -14,6 +14,16 @@ function cleanPhone(phone) {
   return String(phone || "").replace(/[^\d]/g, "");
 }
 
+/** Public HTTPS image/video URLs suitable for WhatsApp Cloud API `link` fields. */
+function isUsableWaMediaUrl(raw) {
+  const u = String(raw || "").trim();
+  if (!u || u.length > 2048) return false;
+  if (!/^https:\/\//i.test(u)) return false;
+  const low = u.toLowerCase();
+  if (/\bno[_-]?image\b|\bnone\b|\btbd\b|\breplace[_-]?me\b/.test(low)) return false;
+  return true;
+}
+
 function minuteBucketKey(now) {
   const d = now || new Date();
   const y = d.getUTCFullYear();
@@ -71,8 +81,10 @@ async function enqueueWaOutboundSend(taskPayload, options) {
     payload.template &&
     String(payload.template.name || "").trim() &&
     Array.isArray(payload.template.bodyParams);
-  if (!String(payload.message || "").trim() && !hasTemplate) {
-    throw new Error("enqueueWaOutboundSend: message or template with bodyParams required");
+  const isImageMsg =
+    String(payload.messageType || "").toLowerCase() === "image" && isUsableWaMediaUrl(payload.imageLink);
+  if (!String(payload.message || "").trim() && !hasTemplate && !isImageMsg) {
+    throw new Error("enqueueWaOutboundSend: message, image, or template with bodyParams required");
   }
 
   // Local/mock mode for integration tests (no Cloud Tasks dependency).
@@ -273,12 +285,49 @@ async function sendTextViaMeta_(taskPayload, waToken, waPhoneId) {
   return { ok: res.ok, status: res.status, body: parsed };
 }
 
+async function sendImageMessageViaMeta_(taskPayload, waToken, waPhoneId) {
+  const link = String(taskPayload.imageLink || "").trim();
+  const cap = String(taskPayload.imageCaption || "").trim().slice(0, 1024);
+  const url = `https://graph.facebook.com/v20.0/${waPhoneId}/messages`;
+  const imagePayload = { link };
+  if (cap) imagePayload.caption = cap;
+  const body = {
+    messaging_product: "whatsapp",
+    to: cleanPhone(taskPayload.to),
+    type: "image",
+    image: imagePayload
+  };
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${waToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  const text = await res.text();
+  let parsed = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    parsed = { raw: text };
+  }
+  return { ok: res.ok, status: res.status, body: parsed };
+}
+
 async function sendTemplateViaMeta_(taskPayload, waToken, waPhoneId) {
   const tpl = taskPayload.template || {};
   const name = String(tpl.name || "").trim();
   const lang = String(tpl.languageCode || "ta").trim() || "ta";
   const bodyParams = Array.isArray(tpl.bodyParams) ? tpl.bodyParams : [];
   const components = [];
+  const headerLink = String(tpl.headerImageLink || "").trim();
+  if (isUsableWaMediaUrl(headerLink)) {
+    components.push({
+      type: "header",
+      parameters: [{ type: "image", image: { link: headerLink } }]
+    });
+  }
   if (bodyParams.length) {
     components.push({
       type: "body",
@@ -356,11 +405,28 @@ function createWaOutboundWorker({ getWaToken, getWaPhoneId }) {
       const tpl = taskPayload.template;
       const tryTemplateFirst = !!(tpl && String(tpl.name || "").trim() && tpl.tryFirst !== false);
       const textBody = String(taskPayload.message || "").trim();
+      const msgType = String(taskPayload.messageType || "text").toLowerCase();
+      const imageLink = String(taskPayload.imageLink || "").trim();
 
       let result;
       let usedKind = "text";
 
-      if (tryTemplateFirst) {
+      if (msgType === "image" && imageLink) {
+        if (!isUsableWaMediaUrl(imageLink)) {
+          warn("WA_OUTBOUND_IMAGE_SKIPPED_BAD_URL", { tenantId, to: taskPayload?.to || "" });
+          if (textBody) {
+            result = await sendTextViaMeta_(taskPayload, waToken, waPhoneId);
+            usedKind = "text";
+          } else {
+            await persistOutboundEvent_(taskPayload, { ok: true, status: 202, body: { skipped: "bad_image_url" } });
+            info("WA_OUTBOUND_IMAGE_SKIP_NO_FALLBACK", { tenantId });
+            return;
+          }
+        } else {
+          result = await sendImageMessageViaMeta_(taskPayload, waToken, waPhoneId);
+          usedKind = "image";
+        }
+      } else if (tryTemplateFirst) {
         result = await sendTemplateViaMeta_(taskPayload, waToken, waPhoneId);
         if (result.ok) {
           usedKind = "template";
@@ -485,5 +551,6 @@ module.exports = {
   createWaOutboundWorker,
   replayDlqMessage,
   TENANT_PER_MINUTE_LIMIT,
-  WA_OUTBOUND_MAX_ATTEMPTS
+  WA_OUTBOUND_MAX_ATTEMPTS,
+  isUsableWaMediaUrl
 };

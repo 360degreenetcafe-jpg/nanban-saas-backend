@@ -3,6 +3,7 @@ const { info } = require("../lib/logger");
 const { runDynamicPricingFromInbound } = require("./dynamicPricingEngine");
 const { enqueueWaOutboundSend } = require("./waOutboundQueue");
 const { resolveChatbotOutboundTemplate } = require("./waTemplateConfig");
+const { tryHandleNanbanQuizInbound } = require("./nanbanQuizInbound");
 
 function cleanPhoneKey(phone) {
   return String(phone || "").replace(/[^0-9]/g, "").slice(0, 20) || "unknown";
@@ -78,6 +79,13 @@ async function queueAdminLeadAlert(tenantId, from, clicked) {
  */
 async function processInboundBusinessActions(ctx) {
   const { tenantId, inbound } = ctx;
+
+  const quiz = await tryHandleNanbanQuizInbound({ tenantId, inbound });
+  if (quiz.handled) {
+    info("INBOUND_QUIZ_HANDLED", { tenantId });
+    return { mode: "firebase", handled: true, quiz: true };
+  }
+
   const clicked = inbound?.interactive?.id || inbound?.interactive?.title || inbound?.text || "";
 
   if (clicked) {
