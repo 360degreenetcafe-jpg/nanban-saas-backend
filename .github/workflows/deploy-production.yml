@@ -37,12 +37,8 @@ jobs:
         working-directory: functions
         run: npm install
 
+      # Pin project id so deploy always targets the GCP project where secrets live.
+      # (Wrong FIREBASE_PROJECT_ID secret caused Secret Manager 403 on WHATSAPP_VERIFY_TOKEN.)
       - name: Deploy Firestore and Functions
-        env:
-          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
         run: |
-          if [ -z "$FIREBASE_PROJECT_ID" ]; then
-            echo "Missing FIREBASE_PROJECT_ID secret"
-            exit 1
-          fi
-          firebase deploy --project "$FIREBASE_PROJECT_ID" --only firestore:rules,firestore:indexes,functions
+          firebase deploy --project nanban-driving-school-d7b20 --only firestore:rules,firestore:indexes,functions
