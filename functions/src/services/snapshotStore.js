@@ -98,18 +98,27 @@ function normalizeSnapshotDocForRead(businessName, raw) {
     }
     return data;
   }
+  const pay = data.payload && typeof data.payload === "object" ? data.payload : {};
   const rawStu =
     data.students !== undefined && data.students !== null
       ? data.students
       : data.Students !== undefined
         ? data.Students
-        : data.studentList;
+        : data.studentList !== undefined
+          ? data.studentList
+          : pay.students !== undefined
+            ? pay.students
+            : pay.Students;
   const rawExp =
     data.expenses !== undefined && data.expenses !== null
       ? data.expenses
       : data.Expenses !== undefined
         ? data.Expenses
-        : data.expenseList;
+        : data.expenseList !== undefined
+          ? data.expenseList
+          : pay.expenses !== undefined
+            ? pay.expenses
+            : pay.Expenses;
   data.students = coerceFirestoreArray(rawStu);
   data.expenses = coerceFirestoreArray(rawExp);
   delete data.Students;
@@ -123,10 +132,22 @@ function normalizeSnapshotDocForRead(businessName, raw) {
 async function getBusinessSnapshotDoc(businessName) {
   const name = String(businessName || "Nanban").trim() || "Nanban";
   const db = admin.firestore();
-  const ref = db.collection("businesses").doc(name).collection("snapshot").doc("main");
-  const snap = await ref.get();
-  const raw = snap.exists ? snap.data() || {} : {};
-  return normalizeSnapshotDocForRead(name, raw);
+  async function readMainDoc(docName) {
+    const ref = db.collection("businesses").doc(docName).collection("snapshot").doc("main");
+    const snap = await ref.get();
+    return snap.exists ? snap.data() || {} : {};
+  }
+  let raw = await readMainDoc(name);
+  let out = normalizeSnapshotDocForRead(name, raw);
+  const stuLen = Array.isArray(out.students) ? out.students.length : 0;
+  const expLen = Array.isArray(out.expenses) ? out.expenses.length : 0;
+  if (name === "Nanban" && stuLen === 0 && expLen === 0) {
+    const rawLo = await readMainDoc("nanban");
+    if (rawLo && typeof rawLo === "object" && Object.keys(rawLo).length) {
+      out = normalizeSnapshotDocForRead("Nanban", rawLo);
+    }
+  }
+  return out;
 }
 
 async function setBusinessSnapshotDoc(businessName, data, merge = true) {

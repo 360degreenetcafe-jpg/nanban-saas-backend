@@ -5685,10 +5685,35 @@
     function nanbanNativeConfigured_() {
         return true;
     }
+    /** Firestore/API may return arrays or map-shaped JSON; never drop rows on the client. */
+    function nanbanCoerceJsonArray_(v) {
+        if (Array.isArray(v)) return v;
+        if (v == null) return [];
+        if (typeof v === 'string') {
+            var s = String(v).trim();
+            if (!s) return [];
+            try {
+                var p = JSON.parse(s);
+                return Array.isArray(p) ? p : [];
+            } catch (e) { return []; }
+        }
+        if (typeof v === 'object') {
+            var keys = Object.keys(v);
+            if (keys.length && keys.every(function(k) { return /^\d+$/.test(k); })) {
+                return keys.sort(function(a, b) { return Number(a) - Number(b); }).map(function(k) { return v[k]; }).filter(function(x) { return x != null; });
+            }
+            var vals = Object.values(v).filter(function(item) {
+                return item && typeof item === 'object' && !Array.isArray(item);
+            });
+            if (vals.length) return vals;
+        }
+        return [];
+    }
+
     async function nanbanFetchSnapshot_() {
         if (!nanbanNativeConfigured_()) return null;
-        let url = getNanbanNativeApiBase_() + "/v1/snapshot?business=Nanban&key=" + encodeURIComponent(getNanbanWebWriteKey_());
-        let r = await fetch(url);
+        var url = getNanbanNativeApiBase_() + "/v1/snapshot?business=Nanban&key=" + encodeURIComponent(getNanbanWebWriteKey_()) + "&_ts=" + Date.now();
+        var r = await fetch(url, { cache: 'no-store' });
         if (!r.ok) return null;
         return r.json();
     }
@@ -6364,12 +6389,24 @@
                 (async function() {
                     try {
                         showLoader("Firebase sync...");
-                        let j = await nanbanFetchSnapshot_();
-                        let snapOk = !!(j && j.ok);
+                        await nanbanHydrateFromRpc_();
+                        var j = null;
+                        try {
+                            j = await nanbanFetchSnapshot_();
+                        } catch (e0) {
+                            console.warn("nanbanFetchSnapshot_", e0);
+                        }
+                        var snapOk = !!(j && j.ok);
                         if (snapOk) {
-                            studentsData = Array.isArray(j.students) ? j.students : [];
-                            ensureStudentFeesResolved_(studentsData);
-                            expensesData = Array.isArray(j.expenses) ? j.expenses : [];
+                            var sSnap = nanbanCoerceJsonArray_(j.students);
+                            var eSnap = nanbanCoerceJsonArray_(j.expenses);
+                            if (sSnap.length >= studentsData.length) {
+                                studentsData = sSnap;
+                                ensureStudentFeesResolved_(studentsData);
+                            }
+                            if (eSnap.length >= expensesData.length) {
+                                expensesData = eSnap;
+                            }
                             if (j.appSettings) appSettings = j.appSettings;
                             if (j.chitData && typeof j.chitData === 'object') {
                                 chitData = Object.assign(
@@ -6378,14 +6415,11 @@
                                 );
                             }
                             nanbanLastSyncAt = Date.now();
-                            localStorage.setItem('nanban_db_cache', JSON.stringify({ students: studentsData, expenses: expensesData }));
-                            localStorage.setItem('nanban_chit_cache', JSON.stringify(chitData));
                         }
-                        if (!snapOk || (studentsData.length === 0 && expensesData.length === 0)) {
-                            await nanbanHydrateFromRpc_();
-                        }
+                        localStorage.setItem('nanban_db_cache', JSON.stringify({ students: studentsData, expenses: expensesData }));
+                        localStorage.setItem('nanban_chit_cache', JSON.stringify(chitData));
                     } catch (e) {
-                        console.warn("nanbanFetchSnapshot_", e);
+                        console.warn("nanbanLoad_", e);
                         try {
                             await nanbanHydrateFromRpc_();
                         } catch (e2) {

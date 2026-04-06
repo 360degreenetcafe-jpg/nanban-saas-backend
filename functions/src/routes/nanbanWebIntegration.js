@@ -52,6 +52,9 @@ function createNanbanWebIntegrationApp({ getWriteKey }) {
     if (!auth(req, res)) return;
     const business = String(req.query.business || "Nanban").trim() || "Nanban";
     try {
+      res.setHeader("Cache-Control", "private, no-store, no-cache, must-revalidate, max-age=0");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
       const data = await getBusinessSnapshotDoc(business);
       res.json({
         ok: true,
@@ -112,6 +115,7 @@ function createNanbanWebIntegrationApp({ getWriteKey }) {
    */
   app.post("/v1/rpc", async (req, res) => {
     if (!auth(req, res)) return;
+    res.setHeader("Cache-Control", "private, no-store, no-cache, must-revalidate, max-age=0");
     const action = String(req.body?.action || "").trim();
     const args = Array.isArray(req.body?.args) ? req.body.args : [];
     if (!action) {
