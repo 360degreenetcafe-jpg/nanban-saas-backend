@@ -1,6 +1,7 @@
 const admin = require("firebase-admin");
 const { getFunctions } = require("firebase-admin/functions");
 const { info, warn, error } = require("../lib/logger");
+const { sanitizeTemplateParamText } = require("../lib/sanitizeTemplateParam");
 
 const DEFAULT_OUTBOUND_DELAY_SECONDS = 0;
 const TENANT_PER_MINUTE_LIMIT = 45;
@@ -66,7 +67,13 @@ async function enqueueWaOutboundSend(taskPayload, options) {
 
   if (!payload.tenantId) throw new Error("enqueueWaOutboundSend: tenantId required");
   if (!payload.to) throw new Error("enqueueWaOutboundSend: recipient phone required");
-  if (!payload.message) throw new Error("enqueueWaOutboundSend: message required");
+  const hasTemplate =
+    payload.template &&
+    String(payload.template.name || "").trim() &&
+    Array.isArray(payload.template.bodyParams);
+  if (!String(payload.message || "").trim() && !hasTemplate) {
+    throw new Error("enqueueWaOutboundSend: message or template with bodyParams required");
+  }
 
   // Local/mock mode for integration tests (no Cloud Tasks dependency).
   if (process.env.WA_OUTBOUND_MOCK === "1") {
@@ -188,6 +195,7 @@ async function persistDlqRecord_({ tenantId, taskPayload, reason, attemptMeta })
     to: String(taskPayload?.to || ""),
     message: String(taskPayload?.message || ""),
     message_type: String(taskPayload?.messageType || "text"),
+    template: taskPayload?.template || null,
     metadata: taskPayload?.metadata || {},
     failure_reason: String(reason || "unknown_error"),
     retry_count: Number(attemptMeta?.retryCount || 0),
@@ -265,6 +273,53 @@ async function sendTextViaMeta_(taskPayload, waToken, waPhoneId) {
   return { ok: res.ok, status: res.status, body: parsed };
 }
 
+async function sendTemplateViaMeta_(taskPayload, waToken, waPhoneId) {
+  const tpl = taskPayload.template || {};
+  const name = String(tpl.name || "").trim();
+  const lang = String(tpl.languageCode || "ta").trim() || "ta";
+  const bodyParams = Array.isArray(tpl.bodyParams) ? tpl.bodyParams : [];
+  const components = [];
+  if (bodyParams.length) {
+    components.push({
+      type: "body",
+      parameters: bodyParams.map((p) => ({
+        type: "text",
+        text: sanitizeTemplateParamText(p)
+      }))
+    });
+  }
+
+  const url = `https://graph.facebook.com/v20.0/${waPhoneId}/messages`;
+  const body = {
+    messaging_product: "whatsapp",
+    to: cleanPhone(taskPayload.to),
+    type: "template",
+    template: {
+      name,
+      language: { code: lang },
+      components
+    }
+  };
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${waToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  const text = await res.text();
+  let parsed = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    parsed = { raw: text };
+  }
+  return { ok: res.ok, status: res.status, body: parsed };
+}
+
 /**
  * Cloud Tasks worker handler.
  * Retries/backoff are configured in index.js onTaskDispatched retryConfig.
@@ -298,8 +353,42 @@ function createWaOutboundWorker({ getWaToken, getWaPhoneId }) {
         throw new Error("WA_OUTBOUND_SECRET_MISSING");
       }
 
-      const result = await sendTextViaMeta_(taskPayload, waToken, waPhoneId);
-      await persistOutboundEvent_(taskPayload, result);
+      const tpl = taskPayload.template;
+      const tryTemplateFirst = !!(tpl && String(tpl.name || "").trim() && tpl.tryFirst !== false);
+      const textBody = String(taskPayload.message || "").trim();
+
+      let result;
+      let usedKind = "text";
+
+      if (tryTemplateFirst) {
+        result = await sendTemplateViaMeta_(taskPayload, waToken, waPhoneId);
+        if (result.ok) {
+          usedKind = "template";
+        } else {
+          warn("WA_OUTBOUND_TEMPLATE_FAILED_TRY_TEXT", {
+            tenantId,
+            to: taskPayload?.to || "",
+            status: result.status,
+            template: tpl.name
+          });
+          if (!textBody) {
+            error("WA_OUTBOUND_TEMPLATE_FAILED_NO_TEXT_FALLBACK", {
+              tenantId,
+              status: result.status
+            });
+            throw new Error(`WA_TEMPLATE_ERROR:${result.status}`);
+          }
+          result = await sendTextViaMeta_(taskPayload, waToken, waPhoneId);
+        }
+      } else {
+        result = await sendTextViaMeta_(taskPayload, waToken, waPhoneId);
+      }
+
+      const persistPayload = Object.assign({}, taskPayload, {
+        messageType: usedKind,
+        metadata: Object.assign({}, taskPayload.metadata || {}, { wa_send_kind: usedKind })
+      });
+      await persistOutboundEvent_(persistPayload, result);
 
       if (!result.ok) {
         error("WA_OUTBOUND_PROVIDER_FAILED", {
@@ -313,7 +402,8 @@ function createWaOutboundWorker({ getWaToken, getWaPhoneId }) {
       info("WA_OUTBOUND_SENT", {
         tenantId,
         to: taskPayload?.to || "",
-        providerStatus: result.status
+        providerStatus: result.status,
+        kind: usedKind
       });
     } catch (err) {
       const reason = String(err && err.message ? err.message : err);
@@ -371,6 +461,9 @@ async function replayDlqMessage({ tenantId, dlqId, replayedBy }) {
       replayed_by: String(replayedBy || "manual_ops")
     })
   };
+  if (data.template && typeof data.template === "object") {
+    taskPayload.template = data.template;
+  }
 
   await enqueueWaOutboundSend(taskPayload, { delaySeconds: 0 });
   await ref.set(

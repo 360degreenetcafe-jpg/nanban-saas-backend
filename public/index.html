@@ -4418,6 +4418,16 @@
                             </div>
                         </div>
 
+                        <div style="background:#ecfdf5; padding:15px; border-radius:12px; border:1px solid #6ee7b7; margin-bottom:15px;">
+                            <label style="color:var(--primary); font-weight:900;">☁️ Firebase native (no Apps Script)</label>
+                            <div style="font-size:11px; color:#065f46; margin:6px 0 10px;">Set the same value as Secret <b>NANBAN_WEB_WRITE_KEY</b> in Google Cloud (Firebase Functions). Data sync + enquiry/admission WhatsApp use this API.</div>
+                            <label style="font-size:12px;">Integration base URL</label>
+                            <input type="text" id="nanbanNativeApiBase" placeholder="https://asia-south1-...cloudfunctions.net/nanbanWebIntegration" style="margin:6px 0; width:100%; box-sizing:border-box;">
+                            <label style="font-size:12px;">Web write key</label>
+                            <input type="password" id="nanbanWebWriteKey" placeholder="Paste secret value" autocomplete="off" style="margin:6px 0; width:100%; box-sizing:border-box;">
+                            <button type="button" class="btn btn-p" style="width:100%; font-size:12px; padding:12px; margin-top:8px;" onclick="saveNanbanNativeSettings(); loadNanbanNativeSettingsToForm();">💾 Save native settings</button>
+                        </div>
+
                         <div style="background:#f8fafc; padding:15px; border-radius:12px; border:1px solid #cbd5e1; margin-bottom:15px;">
                             <label style="color:var(--primary);">🧩 Template Manager v2</label>
                             <input type="text" id="setTemplateEnquiry" placeholder="enquiry template (eg: enquiry_welcom)" style="margin:8px 0;">
@@ -4731,6 +4741,10 @@
     let firebaseAuth = null;
     let ENABLE_SAAS_EXPERIMENT = false; // Production freeze default; staging only.
     const FORCE_LOCAL_STABLE_LOGIN = true; // No bridge dependency for production login.
+    /** HTTPS backend: snapshot + WhatsApp jobs (Secret: NANBAN_WEB_WRITE_KEY). */
+    const NANBAN_NATIVE_API_DEFAULT = "https://asia-south1-nanban-driving-school-d7b20.cloudfunctions.net/nanbanWebIntegration";
+    const NANBAN_NATIVE_API_LS = "nanban_native_api_base";
+    const NANBAN_WEB_WRITE_LS = "nanban_web_write_key";
     let authLoginMode = 'legacy';
     const SAAS_STAGING_FLAG_KEY = 'nanban_saas_staging_enabled';
     const TENANT_CODE_KEY = 'nanban_tenant_code';
@@ -5476,7 +5490,43 @@
         });
     }
 
+    function nanbanNativeRpcCall_(fnName, args) {
+        var base = getNanbanNativeApiBase_();
+        var key = getNanbanWebWriteKey_();
+        return fetch(base + '/v1/rpc', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-nanban-write-key': key
+            },
+            body: JSON.stringify({
+                action: String(fnName || ''),
+                args: Array.isArray(args) ? args : []
+            })
+        }).then(function(r) {
+            return r.text().then(function(t) {
+                var j = null;
+                try { j = JSON.parse(t); } catch (e) { j = null; }
+                return { r: r, j: j, raw: t };
+            });
+        }).then(function(o) {
+            if (!o.j || o.j.ok !== true) {
+                var err = (o.j && (o.j.error || o.j.message)) ? String(o.j.error || o.j.message) : ('HTTP ' + o.r.status);
+                if (o.j && o.j.result && o.j.result.message) err = String(o.j.result.message);
+                throw new Error(err || 'rpc_failed');
+            }
+            return o.j.result;
+        });
+    }
+
     function unifiedRunCall_(fnName, args) {
+        try {
+            if (nanbanNativeConfigured_()) {
+                return nanbanNativeRpcCall_(fnName, args);
+            }
+        } catch (e) {
+            return Promise.reject(e);
+        }
         if (runBridgeMode === 'native') return nativeRunCall_(fnName, args);
         return bridgeFetchCall_(fnName, args, 0).catch(function(err) {
             // Fallback: redirect-safe JSONP transport.
@@ -5637,6 +5687,83 @@
         firebaseReady = false;
         firebaseDb = null;
         return false;
+    }
+
+    function getNanbanNativeApiBase_() {
+        return String(localStorage.getItem(NANBAN_NATIVE_API_LS) || NANBAN_NATIVE_API_DEFAULT).trim().replace(/\/$/, "");
+    }
+    function getNanbanWebWriteKey_() {
+        return String(localStorage.getItem(NANBAN_WEB_WRITE_LS) || "").trim();
+    }
+    function nanbanNativeConfigured_() {
+        return !!getNanbanWebWriteKey_();
+    }
+    async function nanbanFetchSnapshot_() {
+        if (!nanbanNativeConfigured_()) return null;
+        let url = getNanbanNativeApiBase_() + "/v1/snapshot?business=Nanban&key=" + encodeURIComponent(getNanbanWebWriteKey_());
+        let r = await fetch(url);
+        if (!r.ok) return null;
+        return r.json();
+    }
+    async function nanbanPushSnapshot_() {
+        if (!nanbanNativeConfigured_()) return false;
+        let url = getNanbanNativeApiBase_() + "/v1/snapshot";
+        let body = {
+            business: "Nanban",
+            students: studentsData,
+            expenses: expensesData,
+            appSettings: appSettings || {},
+            chitData: chitData || { groups: [], members: [], auctions: [], payments: [], bids: [] }
+        };
+        let r = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "x-nanban-write-key": getNanbanWebWriteKey_()
+            },
+            body: JSON.stringify(body)
+        });
+        return r.ok;
+    }
+    async function nanbanQueueWaJob_(student) {
+        if (!nanbanNativeConfigured_() || !student) return;
+        let url = getNanbanNativeApiBase_() + "/v1/wa/job";
+        await fetch(url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "x-nanban-write-key": getNanbanWebWriteKey_()
+            },
+            body: JSON.stringify({ tenantId: "nanban_main", student: student })
+        });
+    }
+    async function nanbanAfterAdmissionSave_(student) {
+        if (!nanbanNativeConfigured_() || !student) return;
+        try {
+            await nanbanPushSnapshot_();
+        } catch (e) {
+            console.warn("nanbanPushSnapshot_", e);
+        }
+        try {
+            await nanbanQueueWaJob_(student);
+        } catch (e) {
+            console.warn("nanbanQueueWaJob_", e);
+        }
+    }
+    function saveNanbanNativeSettings() {
+        let baseEl = document.getElementById("nanbanNativeApiBase");
+        let keyEl = document.getElementById("nanbanWebWriteKey");
+        let base = baseEl ? String(baseEl.value || "").trim() : "";
+        let key = keyEl ? String(keyEl.value || "").trim() : "";
+        if (base) localStorage.setItem(NANBAN_NATIVE_API_LS, base);
+        if (key) localStorage.setItem(NANBAN_WEB_WRITE_LS, key);
+        showToast("Firebase native settings saved", "success");
+    }
+    function loadNanbanNativeSettingsToForm() {
+        let b = document.getElementById("nanbanNativeApiBase");
+        let k = document.getElementById("nanbanWebWriteKey");
+        if (b) b.value = getNanbanNativeApiBase_();
+        if (k) k.value = getNanbanWebWriteKey_();
     }
 
     async function fbGetSnapshotDoc(businessName) {
@@ -6235,7 +6362,31 @@
     function loadDatabase() {
         if (FORCE_LOCAL_STABLE_LOGIN) {
             ensureDefaultServiceSplits_();
-            // Stable login + online sync: fetch server if bridge available, fallback to cache.
+            if (nanbanNativeConfigured_()) {
+                (async function() {
+                    try {
+                        showLoader("Firebase sync...");
+                        let j = await nanbanFetchSnapshot_();
+                        if (j && j.ok) {
+                            studentsData = Array.isArray(j.students) ? j.students : [];
+                            ensureStudentFeesResolved_(studentsData);
+                            expensesData = Array.isArray(j.expenses) ? j.expenses : [];
+                            if (j.appSettings) appSettings = j.appSettings;
+                            if (j.chitData && j.chitData.groups) chitData = j.chitData;
+                            nanbanLastSyncAt = Date.now();
+                            localStorage.setItem('nanban_db_cache', JSON.stringify({ students: studentsData, expenses: expensesData }));
+                            localStorage.setItem('nanban_chit_cache', JSON.stringify(chitData));
+                        }
+                    } catch (e) {
+                        console.warn("nanbanFetchSnapshot_", e);
+                    }
+                    hideLoader();
+                    try { loadNanbanNativeSettingsToForm(); } catch (e2) {}
+                    renderBasedOnRole();
+                })();
+                return;
+            }
+            // Legacy: Apps Script or GAS bridge
             if (isAppsScriptRuntime_() || isBridgeConfigured_()) {
                 loadDatabaseLegacy();
             } else {
@@ -6247,6 +6398,7 @@
                         expensesData = Array.isArray(obj && obj.expenses) ? obj.expenses : [];
                     }
                 } catch (e) {}
+                try { loadNanbanNativeSettingsToForm(); } catch (e2) {}
                 renderBasedOnRole();
             }
             return;
@@ -7635,19 +7787,24 @@
         let fileInput = document.getElementById('llrFile'); 
         let file = (fileInput && fileInput.files.length > 0) ? fileInput.files[0] : null;
 
-        if (file) { 
-            processFileUpload(file, function(p) { 
-                if (!p) return; 
-                google.script.run
-                    .withSuccessHandler(function(r) { 
-                        if (r && r.url) { processSaving(r.url, r.id, p.type); } 
-                        else { showToast("⚠️ Upload Failed", "danger"); processSaving("", "", ""); } 
-                    })
-                    .withFailureHandler(function() { processSaving("", "", ""); })
-                    .uploadFileToDrive(p.data, p.name); 
-            }); 
-        } else { 
-            processSaving("", "", ""); 
+        if (file) {
+            if (isAppsScriptRuntime_()) {
+                processFileUpload(file, function(p) {
+                    if (!p) return;
+                    google.script.run
+                        .withSuccessHandler(function(r) {
+                            if (r && r.url) { processSaving(r.url, r.id, p.type); }
+                            else { showToast("⚠️ Upload Failed", "danger"); processSaving("", "", ""); }
+                        })
+                        .withFailureHandler(function() { processSaving("", "", ""); })
+                        .uploadFileToDrive(p.data, p.name);
+                });
+            } else {
+                showToast("⚠️ Native mode: LLR PDF → Firebase Storage/Drive link not wired here; saving without file.", "warning");
+                processSaving("", "", "");
+            }
+        } else {
+            processSaving("", "", "");
         }
 
         function processSaving(fileUrl, fileId, fileType) {
@@ -7656,6 +7813,9 @@
             let totFee = parseInt(dTot ? dTot.innerText : 0) || 0;
             let remoteReady = isAppsScriptRuntime_() || isBridgeConfigured_();
             let fastUiMode = !!FORCE_LOCAL_STABLE_LOGIN;
+            let gasSave = remoteReady && !nanbanNativeConfigured_();
+            let studentForNativeWa = null;
+            let newStudent = null;
             
             if (existing) {
                 existing.type = type; 
@@ -7678,8 +7838,9 @@
                 existing.feeSplit = curSplit;
 
                 if (fastUiMode) {
+                    studentForNativeWa = existing;
                     finishUp("அட்மிஷன் அப்டேட் ஆனது!");
-                    if (remoteReady) {
+                    if (gasSave) {
                         try { google.script.run.updateStudentData(existing); } catch (e) {}
                         if (adv > 0) { try { google.script.run.sendDigitalFeeReceiptAction(existing.id, adv, logName, currentUserName); } catch(e) {} }
                         try { google.script.run.sendWelcomeMessageAction(existing.id); } catch(e) {}
@@ -7689,13 +7850,15 @@
                         if (adv > 0) { 
                             try { google.script.run.sendDigitalFeeReceiptAction(existing.id, adv, logName, currentUserName); } catch(e) {} 
                         }
-                        // Trigger welcome message even for updates if it's a new admission form submission
                         try { google.script.run.sendWelcomeMessageAction(existing.id); } catch(e) {}
                         finishUp("அட்மிஷன் அப்டேட் ஆனது!"); 
+                        setTimeout(function() {
+                            if (nanbanNativeConfigured_()) { try { nanbanAfterAdmissionSave_(existing); } catch (e) {} }
+                        }, 0);
                     }).updateStudentData(existing);
                 }
             } else {
-                let newStudent = { 
+                newStudent = { 
                     id: Date.now(), type: type, phone: phone, name: name, gender: gender, service: srvName, advance: adv, totalFee: totFee, 
                     classesAttended: 0, status: autoStatus, dateJoined: getISTDate(), llrStatus: finalLlrStatus, llrDate: getVal('llrDate'), 
                     llrDocUrl: fileUrl, llrDocId: fileId, marks: 0, adminRemarks: [], paymentHistory: adv > 0 ? [{date: getISTDate(), amount: adv, note: `அட்மிஷன் (${logName})`}] : [], 
@@ -7704,8 +7867,9 @@
 
                 if (fastUiMode) {
                     studentsData.unshift(newStudent);
+                    studentForNativeWa = newStudent;
                     finishUp("அட்மிஷன் பதிவானது!");
-                    if (remoteReady) {
+                    if (gasSave) {
                         try { google.script.run.saveStudentData(newStudent); } catch (e) {}
                     }
                 } else {
@@ -7714,6 +7878,9 @@
                             if (r && r.status === 'success') { 
                                 studentsData.unshift(newStudent); 
                                 finishUp("அட்மிஷன் பதிவானது!"); 
+                                setTimeout(function() {
+                                    if (nanbanNativeConfigured_()) { try { nanbanAfterAdmissionSave_(newStudent); } catch (e) {} }
+                                }, 0);
                             } else {
                                 hideLoader();
                                 showToast((r && r.message) ? r.message : "Save failed", "danger");
@@ -7733,7 +7900,7 @@
                 let ne = { date: getISTDate(), spender: logName, cat: govtTypeDesc, amt: govt, desc: name + " (Govt Fee)" }; 
                 if (fastUiMode) {
                     expensesData.push(ne);
-                    if (remoteReady) { try { google.script.run.saveExpenseData(ne); } catch (e) {} }
+                    if (gasSave) { try { google.script.run.saveExpenseData(ne); } catch (e) {} }
                 } else {
                     google.script.run
                         .withSuccessHandler(function(r) { 
@@ -7751,7 +7918,7 @@
                 let ne = { date: getISTDate(), spender: logName, cat: '🔴 செலவு - மற்றவை (Admission)', amt: otherExp, desc: name + " (Other)" }; 
                 if (fastUiMode) {
                     expensesData.push(ne);
-                    if (remoteReady) { try { google.script.run.saveExpenseData(ne); } catch (e) {} }
+                    if (gasSave) { try { google.script.run.saveExpenseData(ne); } catch (e) {} }
                 } else {
                     google.script.run
                         .withSuccessHandler(function(r) { 
@@ -7762,6 +7929,10 @@
                         })
                         .saveExpenseData(ne); 
                 }
+            }
+
+            if (studentForNativeWa && nanbanNativeConfigured_()) {
+                try { nanbanAfterAdmissionSave_(studentForNativeWa); } catch (e) {}
             }
         }
         
@@ -13129,7 +13300,8 @@
     function openESCustomerHistory(customerId) {
         let c = (esevaiData.customers || []).find(function(x) { return String(x.id) === String(customerId); });
         if (!c) return;
-        setHTML('esHistModalTitle', `📜 ${c.name || 'Customer'} - A to Z History`);
+        let title = `📜 ${c.name || 'Customer'} - A to Z History`;
+        setHTML('esHistModalTitle', title);
         let html = `
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:14px;">
                 <input type="date" id="esCustHistFrom">
@@ -13153,7 +13325,9 @@
             Object.keys(catSet).forEach(function(cat) {
                 if (cat === 'all') return;
                 let op = document.createElement('option');
-                op.value = cat; op.textContent = cat; sel.appendChild(op);
+                op.value = cat;
+                op.textContent = cat;
+                sel.appendChild(op);
             });
         }
         applyESCustomerHistoryFilter(customerId);
@@ -13181,7 +13355,11 @@
             }
             return true;
         });
-        let totalBills = tx.length, totalSpend = 0, totalServices = 0, timeline = '';
+        let totalBills = tx.length;
+        let totalSpend = 0;
+        let totalServices = 0;
+        let timeline = '';
+        tx.sort(function(a, b) { return normalizeDateToYmd_(b.date || '') > normalizeDateToYmd_(a.date || '') ? 1 : -1; });
         tx.forEach(function(t) {
             let amt = Number(t.total_amount || t.totalAmount || 0) || 0;
             totalSpend += amt;
@@ -13193,6 +13371,7 @@
                     <b style="color:var(--es-primary);">₹${amt.toLocaleString()}</b>
                 </div>
                 <div style="font-size:11px; color:#64748b; margin-top:4px;">📅 ${esEscape(t.date || '-')} | 💳 ${esEscape(t.payment_mode || t.paymentMode || '-')}</div>
+                <div style="font-size:11px; color:#334155; margin-top:4px;">${items.map(function(it){ return esEscape(it.name || '-') + ' x ' + (Number(it.qty)||1); }).join(' | ')}</div>
             </div>`;
         });
         setHTML('esCustHistoryStats', `
@@ -13318,7 +13497,9 @@
         }
         let html = '';
         rows.forEach(function(a) {
-            let works = (esevaiData.works || []).filter(function(w) { return String(w.agent_id || '') === String(a.id || ''); });
+            let works = (esevaiData.works || []).filter(function(w) {
+                return String(w.agent_id || '') === String(a.id || '');
+            });
             let done = works.filter(function(w) { return String(w.status || '').toLowerCase() === 'finished'; }).length;
             let pending = works.length - done;
             html += `<div class="glass-card" style="padding:12px; border:1px solid #e2e8f0;">
@@ -13471,6 +13652,7 @@
                 return showToast((res && res.message) ? res.message : "Enquiry save தோல்வி", "danger");
             }
 
+            // Agent + LLR flow: bill auto-generate immediately after enquiry submit.
             if (requiresLlr) {
                 let billedTotal = Number(enquiry.quoted_amount) || ((Number(srv.gov_fee) || 0) + (Number(getESServicePrice(srv)) || 0));
                 let billedRecv = Number(enquiry.advance) || 0;

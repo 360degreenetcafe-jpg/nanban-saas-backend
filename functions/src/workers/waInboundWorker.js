@@ -27,6 +27,10 @@ function extractInboundMessages(webhookPayload) {
     for (const change of entry.changes || []) {
       const value = change?.value || {};
       const phoneNumberId = value?.metadata?.phone_number_id || null;
+      const waProfileName =
+        Array.isArray(value.contacts) && value.contacts[0]?.profile?.name
+          ? String(value.contacts[0].profile.name).trim()
+          : "";
       const messages = Array.isArray(value.messages) ? value.messages : [];
       for (const msg of messages) {
         const normalized = {
@@ -37,6 +41,7 @@ function extractInboundMessages(webhookPayload) {
           text: msg?.text?.body || "",
           interactive: null,
           phoneNumberId,
+          profileName: waProfileName,
           raw: msg
         };
         if (msg?.type === "interactive") {
@@ -63,91 +68,74 @@ function extractInboundMessages(webhookPayload) {
 
 /**
  * Firebase 2nd Gen Pub/Sub worker for "wa-inbound" topic.
- *
- * Flow:
- * 1) Parse message from Pub/Sub
- * 2) Validate envelope + extract inbound WhatsApp messages
- * 3) Resolve tenant from WA phone_number_id
- * 4) Idempotency check by wamid in Firestore
- * 5) Call business actions (dynamic pricing / admin lead alerts placeholders)
  */
-function createWaInboundWorker(options) {
-  const getLegacyBridgeUrl = options?.getLegacyBridgeUrl || (() => "");
-  const getLegacyBridgeKey = options?.getLegacyBridgeKey || (() => "");
-
+function createWaInboundWorker() {
   return async function waInboundWorker(event) {
-  let envelope;
-  try {
-    const parsed = parsePubSubJson(event);
-    envelope = PubSubEnvelopeSchema.parse(parsed);
-  } catch (err) {
-    error("WA_WORKER_ENVELOPE_INVALID", { reason: String(err) });
-    return;
-  }
-
-  const inboundMessages = extractInboundMessages(envelope.payload);
-  if (!inboundMessages.length) {
-    info("WA_WORKER_NO_INBOUND_MESSAGES", {});
-    return;
-  }
-
-  for (const inbound of inboundMessages) {
+    let envelope;
     try {
-      if (!inbound.wamid) {
-        warn("WA_WORKER_SKIP_NO_WAMID", { from: inbound.from });
-        continue;
-      }
+      const parsed = parsePubSubJson(event);
+      envelope = PubSubEnvelopeSchema.parse(parsed);
+    } catch (err) {
+      error("WA_WORKER_ENVELOPE_INVALID", { reason: String(err) });
+      return;
+    }
 
-      const tenantContext = await resolveTenantFromPhoneNumberId(inbound.phoneNumberId);
-      const tenantId = tenantContext.tenantId;
+    const inboundMessages = extractInboundMessages(envelope.payload);
+    if (!inboundMessages.length) {
+      info("WA_WORKER_NO_INBOUND_MESSAGES", {});
+      return;
+    }
 
-      const claim = await claimWamidForProcessing({
-        tenantId,
-        wamid: inbound.wamid,
-        from: inbound.from,
-        eventMeta: {
-          routeSource: tenantContext.routeSource,
-          phoneNumberId: tenantContext.phoneNumberId || "",
-          pubsubMessageId: event?.data?.message?.messageId || ""
+    for (const inbound of inboundMessages) {
+      try {
+        if (!inbound.wamid) {
+          warn("WA_WORKER_SKIP_NO_WAMID", { from: inbound.from });
+          continue;
         }
-      });
 
-      if (!claim.claimed) {
-        info("WA_WORKER_DUPLICATE_DROPPED", {
+        const tenantContext = await resolveTenantFromPhoneNumberId(inbound.phoneNumberId);
+        const tenantId = tenantContext.tenantId;
+
+        const claim = await claimWamidForProcessing({
           tenantId,
           wamid: inbound.wamid,
-          reason: claim.reason
+          from: inbound.from,
+          eventMeta: {
+            routeSource: tenantContext.routeSource,
+            phoneNumberId: tenantContext.phoneNumberId || "",
+            pubsubMessageId: event?.data?.message?.messageId || ""
+          }
         });
-        continue;
-      }
 
-      await processInboundBusinessActions({
-        tenantId,
-        tenantRouteSource: tenantContext.routeSource,
-        inbound,
-        bridgeConfig: {
-          url: getLegacyBridgeUrl(),
-          key: getLegacyBridgeKey()
+        if (!claim.claimed) {
+          info("WA_WORKER_DUPLICATE_DROPPED", {
+            tenantId,
+            wamid: inbound.wamid,
+            reason: claim.reason
+          });
+          continue;
         }
-      });
-      // NOTE: processInboundBusinessActions now enqueues outbound Cloud Tasks
-      // via enqueueWaOutboundSend(...). It does not call Meta synchronously.
 
-      info("WA_WORKER_PROCESSED", {
-        tenantId,
-        wamid: inbound.wamid,
-        type: inbound.type,
-        interactiveId: inbound?.interactive?.id || ""
-      });
-    } catch (msgErr) {
-      // Throwing here causes Pub/Sub retry; idempotency gate prevents duplicates.
-      error("WA_WORKER_MESSAGE_PROCESSING_FAILED", {
-        reason: String(msgErr),
-        wamid: inbound?.wamid || ""
-      });
-      throw msgErr;
+        await processInboundBusinessActions({
+          tenantId,
+          tenantRouteSource: tenantContext.routeSource,
+          inbound
+        });
+
+        info("WA_WORKER_PROCESSED", {
+          tenantId,
+          wamid: inbound.wamid,
+          type: inbound.type,
+          interactiveId: inbound?.interactive?.id || ""
+        });
+      } catch (msgErr) {
+        error("WA_WORKER_MESSAGE_PROCESSING_FAILED", {
+          reason: String(msgErr),
+          wamid: inbound?.wamid || ""
+        });
+        throw msgErr;
+      }
     }
-  }
   };
 }
 

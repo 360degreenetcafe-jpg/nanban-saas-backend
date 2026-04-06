@@ -1,10 +1,13 @@
-# Manual deploy: GitHub repo → Actions → this workflow → Run workflow.
+# Deploy: push to `main` or run workflow manually.
 # If deploy fails with secretmanager.secrets.get 403, grant the JSON key service account:
 #   roles/secretmanager.secretAccessor (project-level is simplest) in Google Cloud IAM.
 name: Deploy Firebase Production
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -39,7 +42,7 @@ jobs:
 
       # Pin project id so deploy always targets the GCP project where secrets live.
       # (Wrong FIREBASE_PROJECT_ID secret caused Secret Manager 403 on WHATSAPP_VERIFY_TOKEN.)
-      - name: Deploy Firestore and Functions
+      - name: Deploy Firestore, Hosting, and Functions
         run: |
           # Pub/Sub functions with retry need --force (see waInboundWorker retry: true)
-          firebase deploy --project nanban-driving-school-d7b20 --only firestore:rules,firestore:indexes,functions --force
+          firebase deploy --project nanban-driving-school-d7b20 --only firestore:rules,firestore:indexes,hosting,functions --force

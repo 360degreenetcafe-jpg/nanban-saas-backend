@@ -243,10 +243,7 @@ async function run() {
   });
   await seedCoreData(adminUser.uid, staffUser.uid);
 
-  const inboundWorker = createWaInboundWorker({
-    getLegacyBridgeUrl: () => "mock://success",
-    getLegacyBridgeKey: () => "mock_key"
-  });
+  const inboundWorker = createWaInboundWorker();
   const outboundWorker = createWaOutboundWorker({
     getWaToken: () => "mock_token",
     getWaPhoneId: () => "mock_phone"
@@ -283,20 +280,22 @@ async function run() {
     const after3 = await getOutboundMockCountForPhone("919900000003");
     assertTrue(after3 === before3 + 1, `Flow3: duplicate not dropped (delta=${after3 - before3})`);
 
-    // Flow 4: Cutover toggle gas / firebase
+    // Flow 4: GAS bridge removed — always Firebase engine
     await setBackendMode("gas");
-    await postWebhook(webhookSrv.baseUrl, payloads.flow4_cutover_toggle.webhookPayload);
+    const flow4a = JSON.parse(JSON.stringify(payloads.flow4_cutover_toggle.webhookPayload));
+    flow4a.entry[0].changes[0].value.messages[0].id = "wamid.flow4.native.001";
+    await postWebhook(webhookSrv.baseUrl, flow4a);
     await drainInboundMockEventsAndRunWorker(inboundWorker);
-    const flow4Gas = await getLatestOutboundMockForPhone("919900000004");
-    assertTrue((flow4Gas?.metadata || {}).mode === "gas", "Flow4 gas mode mismatch");
+    const flow4First = await getLatestOutboundMockForPhone("919900000004");
+    assertTrue((flow4First?.metadata || {}).mode === "firebase", "Flow4 expected firebase mode");
 
     await setBackendMode("firebase");
     const flow4b = JSON.parse(JSON.stringify(payloads.flow4_cutover_toggle.webhookPayload));
-    flow4b.entry[0].changes[0].value.messages[0].id = "wamid.flow4.toggle.002";
+    flow4b.entry[0].changes[0].value.messages[0].id = "wamid.flow4.native.002";
     await postWebhook(webhookSrv.baseUrl, flow4b);
     await drainInboundMockEventsAndRunWorker(inboundWorker);
-    const flow4Fb = await getLatestOutboundMockForPhone("919900000004");
-    assertTrue((flow4Fb?.metadata || {}).mode === "firebase", "Flow4 firebase mode mismatch");
+    const flow4Second = await getLatestOutboundMockForPhone("919900000004");
+    assertTrue((flow4Second?.metadata || {}).mode === "firebase", "Flow4 second message firebase mismatch");
 
     // DLQ fallback simulation (final retry exhausted)
     await outboundWorker({

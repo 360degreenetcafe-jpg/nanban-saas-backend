@@ -67,10 +67,7 @@ async function getOutboundMocksByPhone(tenantId, phone) {
 
 async function run() {
   const payloads = loadPayloads();
-  const worker = createWaInboundWorker({
-    getLegacyBridgeUrl: () => "mock://success",
-    getLegacyBridgeKey: () => "mock_key"
-  });
+  const worker = createWaInboundWorker();
 
   const tenantId = "nanban_main";
 
@@ -96,21 +93,22 @@ async function run() {
   const after3 = (await getOutboundMocksByPhone(tenantId, "919900000003")).length;
   assertTrue(after3 === before3 + 1, `Flow3 failed: expected +1 outbound, got ${after3 - before3}`);
 
-  // Flow 4: cutover toggle gas -> firebase
-  const flow4Gas = JSON.parse(JSON.stringify(payloads.flows.flow4_cutover_toggle.webhookPayload));
+  // Flow 4: backend_mode "gas" ignored — always Firebase engine
   await setBackendMode(tenantId, "gas");
-  await worker(toPubSubEvent(flow4Gas, "flow4-msg-gas"));
-  const f4Gas = await getOutboundMocksByPhone(tenantId, "919900000004");
-  assertTrue(f4Gas.length >= 1, "Flow4(gas) failed: no outbound queued");
-  assertTrue((f4Gas[f4Gas.length - 1].metadata || {}).mode === "gas", "Flow4(gas) failed: mode is not gas");
+  const flow4a = JSON.parse(JSON.stringify(payloads.flows.flow4_cutover_toggle.webhookPayload));
+  flow4a.entry[0].changes[0].value.messages[0].id = "wamid.flow4.native.001";
+  await worker(toPubSubEvent(flow4a, "flow4-msg-a"));
+  const f4a = await getOutboundMocksByPhone(tenantId, "919900000004");
+  assertTrue(f4a.length >= 1, "Flow4 failed: no outbound queued");
+  assertTrue((f4a[f4a.length - 1].metadata || {}).mode === "firebase", "Flow4 failed: expected firebase mode");
 
-  const flow4Fb = JSON.parse(JSON.stringify(payloads.flows.flow4_cutover_toggle.webhookPayload));
-  flow4Fb.entry[0].changes[0].value.messages[0].id = "wamid.flow4.toggle.002";
+  const flow4b = JSON.parse(JSON.stringify(payloads.flows.flow4_cutover_toggle.webhookPayload));
+  flow4b.entry[0].changes[0].value.messages[0].id = "wamid.flow4.native.002";
   await setBackendMode(tenantId, "firebase");
-  await worker(toPubSubEvent(flow4Fb, "flow4-msg-firebase"));
-  const f4Fb = await getOutboundMocksByPhone(tenantId, "919900000004");
-  assertTrue(f4Fb.length >= 2, "Flow4(firebase) failed: expected second outbound");
-  assertTrue((f4Fb[f4Fb.length - 1].metadata || {}).mode === "firebase", "Flow4(firebase) failed: mode is not firebase");
+  await worker(toPubSubEvent(flow4b, "flow4-msg-b"));
+  const f4b = await getOutboundMocksByPhone(tenantId, "919900000004");
+  assertTrue(f4b.length >= 2, "Flow4 failed: expected second outbound");
+  assertTrue((f4b[f4b.length - 1].metadata || {}).mode === "firebase", "Flow4 failed: second message not firebase");
 
   console.log("All integration mock flows passed ✅");
 }

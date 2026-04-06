@@ -63,22 +63,22 @@ function computeBreakdown(key, visited) {
   if (Array.isArray(svc.includes) && svc.includes.length) {
     for (const childKey of svc.includes) {
       const child = computeBreakdown(childKey, stack);
-      lines.push(`  - ${child.titleTa}: ${formatInr(child.total)}`);
+      lines.push(`  • ${child.titleTa}: ${formatInr(child.total)}`);
       total += child.total;
     }
   } else {
     const p = svc.pricing || {};
     if (Number(p.llr) > 0) {
-      lines.push(`  - LLR: ${formatInr(p.llr)}`);
+      lines.push(`  • LLR கட்டணம்: ${formatInr(p.llr)}`);
       total += Number(p.llr);
     }
     if (Number(p.license) > 0) {
-      lines.push(`  - License: ${formatInr(p.license)}`);
+      lines.push(`  • ஓட்டுநர் உரிமம்: ${formatInr(p.license)}`);
       total += Number(p.license);
     }
     if (Number(p.training_per_day) > 0 && Number(p.training_days) > 0) {
       const trainTotal = Number(p.training_per_day) * Number(p.training_days);
-      lines.push(`  - Training: ${formatInr(p.training_per_day)} x ${Number(p.training_days)} days = ${formatInr(trainTotal)}`);
+      lines.push(`  • பயிற்சி: ${formatInr(p.training_per_day)} × ${Number(p.training_days)} நாட்கள் = ${formatInr(trainTotal)}`);
       total += trainTotal;
     }
   }
@@ -104,6 +104,92 @@ function unique(list) {
   return out;
 }
 
+/**
+ * Meta template enquiry_welcom ({{1}} name, {{2}} service — "உங்கள் {{2}} க்கான விசாரணை")
+ */
+function buildEnquiryWelcomTwoParams(serviceKeys, displayName) {
+  const keys = unique(serviceKeys);
+  const primaryKey = keys[0] || DEFAULT_SERVICE;
+  const name = String(displayName || "நண்பர்").trim() || "நண்பர்";
+
+  let serviceTa = "ஓட்டுநர் பயிற்சி";
+  if (primaryKey === "TW_FULL") serviceTa = "இருசக்கர வாகன பயிற்சி";
+  else if (primaryKey === "FW_LICENSE_ONLY" || primaryKey === "FW_LICENSE_TRAINING") serviceTa = "கார் பயிற்சி";
+  else if (primaryKey === "FW_TRAINING_ONLY") serviceTa = "நான்கு சக்கர பயிற்சி";
+  else if (primaryKey === "COMBO_2W_4W") serviceTa = "2W + 4W காம்போ பயிற்சி";
+
+  return [name, serviceTa];
+}
+
+/**
+ * Legacy 4-param enquiry body (if Meta template still uses 4 variables).
+ * [name, vehicleType, totalPackage, secondaryAmount]
+ */
+function buildEnquiryStyleTemplateParams(serviceKeys, displayName) {
+  const keys = unique(serviceKeys);
+  const primaryKey = keys[0] || DEFAULT_SERVICE;
+  const svc = SERVICE_CATALOG[primaryKey] || SERVICE_CATALOG[DEFAULT_SERVICE];
+  const p = svc.pricing || {};
+
+  const name = String(displayName || "நண்பர்").trim() || "நண்பர்";
+  let vehicleEn = "Two-Wheeler";
+  if (primaryKey === "FW_LICENSE_ONLY" || primaryKey === "FW_LICENSE_TRAINING") vehicleEn = "Four-Wheeler";
+  else if (primaryKey === "FW_TRAINING_ONLY") vehicleEn = "Four-Wheeler (Training)";
+  else if (primaryKey === "COMBO_2W_4W") vehicleEn = "2W + 4W Combo";
+
+  const b = computeBreakdown(primaryKey, {});
+  const total = Number(b.total) || 0;
+  const llr = Number(p.llr) || 0;
+  const license = Number(p.license) || 0;
+  const totalStr = formatInr(total);
+  const secondStr =
+    license > 0 ? formatInr(license) : llr > 0 ? formatInr(llr) : totalStr;
+
+  return [name, vehicleEn, totalStr, secondStr];
+}
+
+function normalizeInboundGreetingText(raw) {
+  const t = String(raw || "")
+    .trim()
+    .replace(/^[\s\uFEFF]+|[\s\uFEFF]+$/g, "");
+  const lower = t.toLowerCase();
+  const stripped = lower.replace(/^[^\p{L}\p{N}]+/u, "").replace(/[^\p{L}\p{N}]+$/u, "");
+  return { original: t, lower, stripped };
+}
+
+function isGreetingInbound(pid, text) {
+  if (String(pid || "").trim()) return false;
+  const raw = String(text || "").trim();
+  const { lower, stripped } = normalizeInboundGreetingText(text);
+  if (!stripped && !raw) return false;
+  // Tamil "ம்" can be Unicode mark (Mc); do not rely on stripped-only checks for வணக்கம்.
+  if (raw.includes("வணக்கம்") || lower.includes("vanakkam")) return true;
+  if (!stripped) return false;
+  const greetings = [
+    "hi",
+    "hello",
+    "hey",
+    "hai",
+    "hlo",
+    "hii",
+    "helo",
+    "good morning",
+    "good evening",
+    "good afternoon",
+    "gm",
+    "namaste",
+    "namaskar",
+    "வணக்கம்"
+  ];
+  for (const g of greetings) {
+    if (stripped === g || stripped.startsWith(`${g} `) || stripped.startsWith(`${g},`) || stripped.startsWith(`${g}!`)) {
+      return true;
+    }
+  }
+  if (/^h+i+!*$/.test(stripped) || /^h+e+l+o+!*$/.test(stripped)) return true;
+  return false;
+}
+
 function buildDynamicPricingMessage(serviceKeys, heading) {
   const keys = unique(serviceKeys);
   const finalKeys = keys.length ? keys : [DEFAULT_SERVICE];
@@ -116,24 +202,25 @@ function buildDynamicPricingMessage(serviceKeys, heading) {
     grandTotal += Number(b.total) || 0;
   }
 
-  let text = `${heading || "💰 கட்டண விவரம் (Dynamic Pricing)"}`;
+  let text = `${heading || "*கட்டண விவரம்*"}`;
   for (const block of blocks) {
-    text += `\n\n• *${block.titleTa}*\n`;
-    text += block.lines.length ? `${block.lines.join("\n")}\n` : "  - தகவல் இல்லை\n";
-    text += `  = *${formatInr(block.total)}*`;
+    text += `\n\n▸ *${block.titleTa}*\n`;
+    text += block.lines.length ? `${block.lines.join("\n")}\n` : "  • விவரம் தற்போது கிடைக்கவில்லை\n";
+    text += `  மொத்தம்: *${formatInr(block.total)}*`;
   }
-  if (blocks.length > 1) text += `\n\n🧮 *Grand Total:* ${formatInr(grandTotal)}`;
+  if (blocks.length > 1) text += `\n\nஒட்டுமொத்த கட்டணம்: *${formatInr(grandTotal)}*`;
   return text.trim();
 }
 
 function deriveSelectionFromInbound(inbound) {
   const pid = String(inbound?.interactive?.id || "").trim();
   const text = String(inbound?.interactive?.title || inbound?.text || "").trim();
-  const lowerText = text.toLowerCase();
 
-  if (!pid && (lowerText === "hi" || lowerText === "hello" || lowerText === "hey" || lowerText === "hai" || lowerText === "hlo" || lowerText.includes("வணக்கம்"))) {
+  if (isGreetingInbound(pid, text)) {
     return { action: "welcome", serviceKeys: [DEFAULT_SERVICE] };
   }
+
+  const lowerText = text.toLowerCase();
 
   if (pid.startsWith("FEE_SEL::")) {
     return { action: "select", serviceKeys: [normalizeServiceKey(pid)] };
@@ -163,8 +250,9 @@ function runDynamicPricingFromInbound(inbound, selectedServices) {
     const next = exists ? base.filter((k) => k !== key) : base.concat([key]);
     return {
       handled: true,
+      outboundKind: "fee_select",
       selectedServices: next.length ? next : [key],
-      message: buildDynamicPricingMessage(next.length ? next : [key], "✅ தேர்வு புதுப்பிக்கப்பட்டது")
+      message: buildDynamicPricingMessage(next.length ? next : [key], "தேர்வு புதுப்பிக்கப்பட்டது")
     };
   }
 
@@ -172,25 +260,34 @@ function runDynamicPricingFromInbound(inbound, selectedServices) {
     const merged = unique(base.concat(derived.serviceKeys));
     return {
       handled: true,
+      outboundKind: "fee_detail",
       selectedServices: merged.length ? merged : [DEFAULT_SERVICE],
-      message: buildDynamicPricingMessage(merged.length ? merged : [DEFAULT_SERVICE], "📣 உங்கள் தேர்வுக்கான கட்டண விவரம்")
+      message: buildDynamicPricingMessage(merged.length ? merged : [DEFAULT_SERVICE], "உங்கள் தேர்வுக்கான கட்டண விவரம்")
     };
   }
 
   if (derived.action === "welcome") {
     const welcome =
-      "வணக்கம்! 🙏 நண்பன் டிரைவிங் ஸ்கூலுக்கு வரவேற்கிறோம்.\n" +
-      "👇 கட்டண விவரம் பார்க்க *MENU_FEES* தேர்வு செய்யலாம்.\n\n" +
-      buildDynamicPricingMessage([DEFAULT_SERVICE], "📌 Starter Package Preview");
-    return { handled: true, selectedServices: [DEFAULT_SERVICE], message: welcome };
+      "வணக்கம்,\n\n" +
+      "*நண்பன் டிரைவிங் ஸ்கூல்* — உங்கள் விசாரணை பதிவு செய்யப்பட்டுள்ளது.\n\n" +
+      "முழுக் கட்டணப் பட்டியலுக்கு மெனுவில் *கட்டண விவரம்* (MENU_FEES) தேர்வைப் பயன்படுத்தவும்.\n\n" +
+      buildDynamicPricingMessage([DEFAULT_SERVICE], "சுருக்க கட்டணப் பார்வை (இருசக்கரம் — முழு பேக்கேஜ்)");
+    return {
+      handled: true,
+      outboundKind: "welcome",
+      selectedServices: [DEFAULT_SERVICE],
+      message: welcome
+    };
   }
 
-  return { handled: false, selectedServices: base, message: "" };
+  return { handled: false, outboundKind: "noop", selectedServices: base, message: "" };
 }
 
 module.exports = {
   SERVICE_CATALOG,
   normalizeServiceKey,
   buildDynamicPricingMessage,
+  buildEnquiryWelcomTwoParams,
+  buildEnquiryStyleTemplateParams,
   runDynamicPricingFromInbound
 };

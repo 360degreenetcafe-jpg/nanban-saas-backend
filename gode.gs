@@ -1757,7 +1757,7 @@ function getTemplateAndReminderConfig() {
         let settings = getAppSettings();
         let a = (settings && settings.appSettings) ? settings.appSettings : {};
         return {
-            enquiryTemplate: String(a.enquiryTemplate || "enquiry_welcome").trim(),
+            enquiryTemplate: String(a.enquiryTemplate || "enquiry_welcom").trim(),
             welcomeTemplate: String(a.welcomeTemplate || "welcome_admission").trim(),
             llrTemplate: String(a.llrAdmissionTemplate || "welcome_admission").trim(),
             rtoTemplate: String(a.rtoReminderTemplate || "rto_test_reminder").trim(),
@@ -1780,7 +1780,7 @@ function getTemplateAndReminderConfig() {
         };
     } catch (e) {
         return {
-            enquiryTemplate: "enquiry_welcome",
+            enquiryTemplate: "enquiry_welcom",
             welcomeTemplate: "welcome_admission",
             llrTemplate: "welcome_admission",
             rtoTemplate: "rto_test_reminder",
@@ -1911,29 +1911,29 @@ function computeServiceBreakdown_(serviceKey, cfg, stack) {
     let svc = cfg[key];
     let lines = [];
     let total = 0;
-    if (Array.isArray(svc.includes) && svc.includes.length) {
+        if (Array.isArray(svc.includes) && svc.includes.length) {
         svc.includes.forEach(function(childKey) {
             let child = computeServiceBreakdown_(childKey, cfg, stack);
-            if (child.total > 0) lines.push("  - " + (child.title_ta || child.title || childKey) + ": " + formatInr_(child.total));
+            if (child.total > 0) lines.push("  • " + (child.title_ta || child.title || childKey) + ": " + formatInr_(child.total));
             total += child.total;
         });
     } else {
         let p = svc.pricing || {};
         if (Number(p.llr) > 0) {
-            lines.push("  - LLR: " + formatInr_(p.llr));
+            lines.push("  • LLR கட்டணம்: " + formatInr_(p.llr));
             total += Number(p.llr) || 0;
         }
         if (Number(p.license) > 0) {
-            lines.push("  - License: " + formatInr_(p.license));
+            lines.push("  • ஓட்டுநர் உரிமம்: " + formatInr_(p.license));
             total += Number(p.license) || 0;
         }
         if (Number(p.training_per_day) > 0 && Number(p.training_days) > 0) {
             let tr = (Number(p.training_per_day) || 0) * (Number(p.training_days) || 0);
-            lines.push("  - Training: " + formatInr_(p.training_per_day) + " x " + Number(p.training_days) + " days = " + formatInr_(tr));
+            lines.push("  • பயிற்சி: " + formatInr_(p.training_per_day) + " × " + Number(p.training_days) + " நாட்கள் = " + formatInr_(tr));
             total += tr;
         }
         if (Number(p.fixed_total) > 0 && total <= 0) {
-            lines.push("  - Package Total: " + formatInr_(p.fixed_total));
+            lines.push("  • பேக்கேஜ் மொத்தம்: " + formatInr_(p.fixed_total));
             total += Number(p.fixed_total) || 0;
         }
     }
@@ -1961,14 +1961,14 @@ function buildDynamicFeeMessageByServices_(serviceKeys, heading) {
         grand += Number(b.total) || 0;
     });
 
-    let text = (heading ? String(heading) + "\n\n" : "") + "💰 *கட்டண விவரம் (Dynamic Pricing)*\n";
+    let text = (heading ? String(heading) + "\n\n" : "") + "*கட்டண விவரம்*\n";
     blocks.forEach(function(b) {
-        text += "\n• *" + b.title_ta + "*\n";
-        if (!b.lines.length) text += "  - தகவல் இல்லை\n";
+        text += "\n▸ *" + b.title_ta + "*\n";
+        if (!b.lines.length) text += "  • விவரம் தற்போது கிடைக்கவில்லை\n";
         else text += b.lines.join("\n") + "\n";
-        text += "  = *" + formatInr_(b.total) + "*\n";
+        text += "  மொத்தம்: *" + formatInr_(b.total) + "*\n";
     });
-    if (blocks.length > 1) text += "\n🧮 *Grand Total:* " + formatInr_(grand) + "\n";
+    if (blocks.length > 1) text += "\nஒட்டுமொத்த கட்டணம்: *" + formatInr_(grand) + "*\n";
     return text.trim();
 }
 
@@ -2009,6 +2009,21 @@ function setChatbotUserState_(phone, obj) {
     } catch (e) {}
 }
 
+/** Meta enquiry_welcom body {{2}} — Tamil service phrase (matches Firebase dynamicPricingEngine). */
+function enquiryWelcomServiceLabelTa_(serviceRaw, vehicleTypeEn) {
+    var s = String(serviceRaw || "");
+    var low = s.toLowerCase();
+    if (low.indexOf("combo") !== -1 || s.indexOf("காம்போ") !== -1 || low.indexOf("2w + 4w") !== -1)
+        return "2W + 4W காம்போ பயிற்சி";
+    if (low.indexOf("2") !== -1 || low.indexOf("two") !== -1 || s.indexOf("டூ") !== -1 || s.indexOf("இரு") !== -1)
+        return "இருசக்கர வாகன பயிற்சி";
+    if (low.indexOf("4") !== -1 || low.indexOf("four") !== -1 || s.indexOf("கார்") !== -1 || s.indexOf("நான்கு") !== -1)
+        return "கார் பயிற்சி";
+    if (String(vehicleTypeEn || "") === "Two-Wheeler") return "இருசக்கர வாகன பயிற்சி";
+    var t = s.trim();
+    return t || "ஓட்டுநர் பயிற்சி";
+}
+
 function buildFirstInquiryWelcomeText_(name, serviceTextOrKey) {
     let n = String(name || "மாணவரே");
     let key = normalizeServiceKey_(serviceTextOrKey);
@@ -2016,14 +2031,17 @@ function buildFirstInquiryWelcomeText_(name, serviceTextOrKey) {
     let svc = cfg[key] || cfg.TW_FULL;
     let feePreview = buildDynamicFeeMessageByServices_([key]);
     return (
-        `வணக்கம் ${n}! 🙏\n` +
-        `நண்பன் டிரைவிங் ஸ்கூலுக்கு உங்களை வரவேற்கிறோம்! நீங்கள் *${svc.title_ta}* குறித்து விசாரித்துள்ளீர்கள்.\n\n` +
-        `✨ ஏன் நண்பன் டிரைவிங் ஸ்கூல்?\n` +
-        `• 100% வெளிப்படைத்தன்மை கொண்ட பிரத்தியேக மொபைல் ஆப்.\n` +
-        `• ஒவ்வொரு கிளாஸ் முடிந்ததும் WhatsApp-ல் ஆட்டோமேட்டிக் அலர்ட் & ரிப்போர்ட்.\n` +
-        `• வேறு எங்கும் இல்லாத Video Tutor (வீடியோ மூலம் விரிவான விளக்கம்).\n` +
-        `• சரியான முறையில் வண்டி ஓட்ட கற்றுக்கொள்ள நவீன தொழில்நுட்பம்.\n\n` +
-        feePreview
+        `வணக்கம் ${n},\n\n` +
+        `*நண்பன் டிரைவிங் ஸ்கூல்* — உங்கள் விசாரணை பதிவு செய்யப்பட்டுள்ளது.\n\n` +
+        `*தேர்ந்தெடுக்கப்பட்ட சேவை*\n` +
+        `▸ ${svc.title_ta}\n\n` +
+        `*எங்கள் தளத்தின் முக்கிய அம்சங்கள்*\n` +
+        `• முழுமையான டிஜிட்டல் கண்காணிப்பு — பிரத்தியேக மொபைல் செயலி வழி\n` +
+        `• ஒவ்வொரு வகுப்பு நிறைவுக்குப் பிறகு WhatsApp அறிவிப்பு மற்றும் சுருக்க அறிக்கை\n` +
+        `• விரிவான வீடியோ வழிகாட்டி (Video Tutor)\n` +
+        `• நவீன, பாதுகாப்பான பயிற்சி முறைகள்\n\n` +
+        feePreview +
+        `\n\nமேலும் விவரம் அல்லது அட்மிஷன் தொடர்பாக கீழுள்ள பொத்தான்களைப் பயன்படுத்தவும். நன்றி.`
     );
 }
 
@@ -6089,14 +6107,16 @@ function triggerWelcomeMessage(student) {
             if (student.type === 'Enquiry') {
                 // 🚀 Immediate welcome + CTA buttons for walk-in / online enquiry
                 let cfg = getTemplateAndReminderConfig();
-                let tEnq = cfg.enquiryTemplate || "enquiry_welcome";
+                let tEnq = cfg.enquiryTemplate || "enquiry_welcom";
                 let vehicleType = (String(student.service || "").toLowerCase().indexOf("2") !== -1 || String(student.service || "").toLowerCase().indexOf("two") !== -1 || String(student.service || "").indexOf("டூ") !== -1)
                     ? "Two-Wheeler"
                     : String(student.service || "Driving Course");
+                var serviceTa = enquiryWelcomServiceLabelTa_(student.service, vehicleType);
                 let resT = sendTemplateWithParamFallback(
                     student.phone,
                     tEnq,
                     [
+                        [String(student.name || "-"), serviceTa],
                         [String(student.name || "-"), String(vehicleType), "₹2800", "₹1800"],
                         [String(student.name || "-"), String(vehicleType)],
                         [String(student.name || "-")],

@@ -1,9 +1,8 @@
 const admin = require("firebase-admin");
-const { info, warn } = require("../lib/logger");
+const { info } = require("../lib/logger");
 const { runDynamicPricingFromInbound } = require("./dynamicPricingEngine");
-const { getTenantBackendMode } = require("./tenantBackendMode");
-const { invokeLegacyGasDynamicPricing } = require("./legacyGasAdapter");
 const { enqueueWaOutboundSend } = require("./waOutboundQueue");
+const { resolveChatbotOutboundTemplate } = require("./waTemplateConfig");
 
 function cleanPhoneKey(phone) {
   return String(phone || "").replace(/[^0-9]/g, "").slice(0, 20) || "unknown";
@@ -34,18 +33,32 @@ async function saveChatbotState(tenantId, phone, state) {
   );
 }
 
-async function queueOutboundMessage(tenantId, to, message, meta) {
+/**
+ * Firebase chatbot: Meta template first (enquiry welcome + optional fee summary), then text fallback.
+ */
+async function queueOutboundFirebaseChatbot(tenantId, to, result, meta) {
+  const textBody = String(result?.message || "").trim();
+  const { template } = await resolveChatbotOutboundTemplate(tenantId, result?.outboundKind || "noop", {
+    messageText: textBody,
+    selectedServices: result.selectedServices || [],
+    displayName: meta?.displayName || ""
+  });
+
   await enqueueWaOutboundSend(
     {
       tenantId,
       to,
-      message,
-      messageType: "text",
-      metadata: meta || {}
+      message: textBody,
+      messageType: template ? "template_with_text_fallback" : "text",
+      template,
+      metadata: Object.assign({}, meta || {}, {
+        outbound_kind: result?.outboundKind || "",
+        template_name: template ? template.name : ""
+      })
     },
     { delaySeconds: 0 }
   );
-  info("OUTBOUND_TASK_QUEUED_FROM_WORKER_ACTIONS", { tenantId, to });
+  info("OUTBOUND_TASK_QUEUED_FROM_WORKER_ACTIONS", { tenantId, to, kind: result?.outboundKind || "" });
 }
 
 /**
@@ -61,38 +74,14 @@ async function queueAdminLeadAlert(tenantId, from, clicked) {
 }
 
 /**
- * Canary-safe business action router.
- *
- * backend_mode in Firestore:
- * - platform_tenants/{tenantId}.backend_mode = "firebase" | "gas"
- *
- * firebase => new dynamic pricing engine in Cloud Functions
- * gas      => fallback to legacy GAS adapter during cutover
+ * Business action router — Firebase engine only (no GAS bridge).
  */
 async function processInboundBusinessActions(ctx) {
-  const { tenantId, inbound, bridgeConfig } = ctx;
-  const backendMode = await getTenantBackendMode(tenantId);
+  const { tenantId, inbound } = ctx;
   const clicked = inbound?.interactive?.id || inbound?.interactive?.title || inbound?.text || "";
 
-  // Admin lead alert should happen in both modes.
   if (clicked) {
     await queueAdminLeadAlert(tenantId, inbound?.from || "", clicked);
-  }
-
-  if (backendMode === "gas") {
-    const legacy = await invokeLegacyGasDynamicPricing({
-      bridgeUrl: bridgeConfig?.url || "",
-      bridgeKey: bridgeConfig?.key || "",
-      inbound
-    });
-
-    if (legacy.ok && legacy.message) {
-      await queueOutboundMessage(tenantId, inbound?.from || "", legacy.message, { mode: "gas" });
-      return { mode: "gas", handled: true };
-    }
-
-    // Safety fallback: if GAS path fails, use firebase engine instead.
-    warn("GAS_FALLBACK_FAILED_SWITCH_TO_FIREBASE_ENGINE", { tenantId, wamid: inbound?.wamid || "" });
   }
 
   const state = await loadChatbotState(tenantId, inbound?.from || "");
@@ -106,9 +95,10 @@ async function processInboundBusinessActions(ctx) {
     selected_services: result.selectedServices || []
   });
 
-  await queueOutboundMessage(tenantId, inbound?.from || "", result.message, {
+  await queueOutboundFirebaseChatbot(tenantId, inbound?.from || "", result, {
     mode: "firebase",
-    selectedServices: result.selectedServices || []
+    selectedServices: result.selectedServices || [],
+    displayName: inbound?.profileName || ""
   });
 
   return { mode: "firebase", handled: true };
