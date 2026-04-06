@@ -69,6 +69,44 @@ function popTenantFromArgs(args) {
   return { tenantId: TENANT_DEFAULT, args };
 }
 
+function looksLikeJsonArrayString(s) {
+  return String(s ?? "").trim().startsWith("[");
+}
+
+/**
+ * Hosted UI (index.html confirmEndDay) sends: trainer, receiver, runKm, testResultsJson, 0, 0, expAmt, expDesc, receiptUrl?
+ * Legacy Apps Script sent: trainer, receiver, expAmt, expDesc, runKm, testResultsJson
+ * If the client omits receiptUrl (8 args), args.length >= 9 was false and runKm was mis-read as expAmt (₹1 vehicle expense).
+ */
+function parseProcessDayCloseArgs(rawArgs) {
+  const a = Array.isArray(rawArgs) ? rawArgs : [];
+  const pad4 = a[4];
+  const pad5 = a[5];
+  const hasHostedPadding =
+    a.length >= 8 &&
+    (pad4 === 0 || pad4 === "0") &&
+    (pad5 === 0 || pad5 === "0");
+  const hostedByJson = a.length >= 8 && looksLikeJsonArrayString(a[3]);
+  if (hasHostedPadding || (a.length >= 9 && hostedByJson)) {
+    return {
+      trainer: String(a[0] || ""),
+      receiver: String(a[1] || ""),
+      runKm: parseInt(a[2], 10) || 0,
+      testResultsJson: a[3],
+      expAmt: parseInt(a[6], 10) || 0,
+      expDesc: String(a[7] || "")
+    };
+  }
+  return {
+    trainer: String(a[0] || ""),
+    receiver: String(a[1] || ""),
+    expAmt: parseInt(a[2], 10) || 0,
+    expDesc: String(a[3] || ""),
+    runKm: parseInt(a[4], 10) || 0,
+    testResultsJson: a[5]
+  };
+}
+
 async function loadEsevaiModel(tenantId) {
   const raw = await getBusinessSnapshotDoc("ESevai");
   const data = raw && typeof raw === "object" ? { ...raw } : {};
@@ -574,7 +612,8 @@ async function handleErpRpc(action, rawArgs) {
         const type = String(args[1] || "");
         const att = parseInt(args[2], 10) || 0;
         const perf = String(args[3] || "");
-        const amt = parseInt(args[4], 10) || 0;
+        let amt = parseInt(args[4], 10) || 0;
+        if (type === "class") amt = 0;
         const trainer = String(args[5] || "Trainer");
         const today = getISTDateString();
         const snap = await getBusinessSnapshotDoc("Nanban");
@@ -923,27 +962,13 @@ async function handleErpRpc(action, rawArgs) {
       }
 
       case "processDayCloseHandover": {
-        let trainer;
-        let receiver;
-        let runKm;
-        let testResultsJson;
-        let expAmt;
-        let expDesc;
-        if (args.length >= 9) {
-          trainer = String(args[0] || "");
-          receiver = String(args[1] || "");
-          runKm = parseInt(args[2], 10) || 0;
-          testResultsJson = args[3];
-          expAmt = parseInt(args[6], 10) || 0;
-          expDesc = String(args[7] || "");
-        } else {
-          trainer = String(args[0] || "");
-          receiver = String(args[1] || "");
-          expAmt = parseInt(args[2], 10) || 0;
-          expDesc = String(args[3] || "");
-          runKm = parseInt(args[4], 10) || 0;
-          testResultsJson = args[5];
-        }
+        const parsed = parseProcessDayCloseArgs(args);
+        const trainer = parsed.trainer;
+        const receiver = parsed.receiver;
+        const runKm = parsed.runKm;
+        const testResultsJson = parsed.testResultsJson;
+        const expAmt = parsed.expAmt;
+        const expDesc = parsed.expDesc;
         let testResults = [];
         try {
           if (testResultsJson) testResults = JSON.parse(String(testResultsJson));

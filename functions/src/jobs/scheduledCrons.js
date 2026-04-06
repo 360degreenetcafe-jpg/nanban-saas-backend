@@ -19,6 +19,17 @@ const {
 const TENANT_DEFAULT = "nanban_main";
 const Q = { cat: 0, day: 1, ques: 2, o1: 3, o2: 4, o3: 5, ansText: 6, img: 7 };
 
+function shuffleInPlace(arr) {
+  const a = Array.isArray(arr) ? arr : [];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = a[i];
+    a[i] = a[j];
+    a[j] = t;
+  }
+  return a;
+}
+
 function normPhone10(p) {
   let d = String(p || "").replace(/\D/g, "");
   if (d.length > 10) d = d.slice(-10);
@@ -103,6 +114,7 @@ async function runNanbanDailyMorning(opts = {}) {
           if (!targetCats.includes(catA) && targetCats.includes(catB)) return 1;
           return 0;
         });
+        shuffleInPlace(todayQuestions);
 
         const wa = waE164(s.phone);
         for (let q = 0; q < todayQuestions.length && q < 3; q++) {

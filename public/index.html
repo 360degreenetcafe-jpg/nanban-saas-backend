@@ -9578,7 +9578,7 @@
         let type = getVal('taActionType') || 'class'; 
         let attCount = (type === 'class') ? (parseInt(getVal('taAttCount')) || 0) : 0; 
         let perf = (type === 'class') ? getVal('taPerformance') : ''; 
-        let amt = parseInt(getVal('taAmount')) || 0; 
+        let amt = (type === 'class') ? 0 : (parseInt(getVal('taAmount')) || 0); 
         
         if (type === 'cash' && amt === 0) { 
             return showToast("பணம் உள்ளிடவும்!", "danger"); 
