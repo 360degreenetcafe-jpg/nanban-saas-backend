@@ -1,4 +1,4 @@
-name: CI/CD - Firebase Gate and Deploy
+name: CI - Lint and Firebase E2E
 
 on:
   push:
@@ -72,42 +72,4 @@ jobs:
           FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099
           GCLOUD_PROJECT=nanban-driving-school-d7b20
           npm run test:e2e:bootstrap"
-
-  deploy-production:
-    name: Deploy Firebase Production
-    needs: e2e-emulator-gate
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    environment: production
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-
-      - name: Install Firebase CLI
-        run: npm install -g firebase-tools
-
-      - name: Install Functions Dependencies
-        working-directory: functions
-        run: npm install
-
-      - name: Deploy Firestore and Functions
-        env:
-          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
-        run: |
-          if [ -z "$FIREBASE_PROJECT_ID" ]; then
-            echo "Missing FIREBASE_PROJECT_ID secret"
-            exit 1
-          fi
-          firebase deploy --project "$FIREBASE_PROJECT_ID" --only firestore:rules,firestore:indexes,functions
+# Production deploy: use workflow "Deploy Firebase Production" (manual) after Secret Manager IAM is fixed.
