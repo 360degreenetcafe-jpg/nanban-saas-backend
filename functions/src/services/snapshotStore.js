@@ -80,6 +80,48 @@ function coerceChitData(raw) {
   return base;
 }
 
+/**
+ * Prefer the candidate field that coerces to the longest array.
+ * Fixes legacy docs where `students: []` shadowed real rows in `payload.students`.
+ */
+function pickBestStudentsRaw_(data) {
+  const pay = data.payload && typeof data.payload === "object" ? data.payload : {};
+  const candidates = [
+    data.students,
+    data.Students,
+    data.studentList,
+    pay.students,
+    pay.Students
+  ];
+  let best = null;
+  let bestLen = -1;
+  for (const c of candidates) {
+    if (c === undefined || c === null) continue;
+    const len = coerceFirestoreArray(c).length;
+    if (len > bestLen) {
+      bestLen = len;
+      best = c;
+    }
+  }
+  return bestLen <= 0 ? [] : best;
+}
+
+function pickBestExpensesRaw_(data) {
+  const pay = data.payload && typeof data.payload === "object" ? data.payload : {};
+  const candidates = [data.expenses, data.Expenses, data.expenseList, pay.expenses, pay.Expenses];
+  let best = null;
+  let bestLen = -1;
+  for (const c of candidates) {
+    if (c === undefined || c === null) continue;
+    const len = coerceFirestoreArray(c).length;
+    if (len > bestLen) {
+      bestLen = len;
+      best = c;
+    }
+  }
+  return bestLen <= 0 ? [] : best;
+}
+
 function normalizeSnapshotDocForRead(businessName, raw) {
   const id = String(businessName || "Nanban").trim() || "Nanban";
   const data = raw && typeof raw === "object" ? { ...raw } : {};
@@ -98,27 +140,8 @@ function normalizeSnapshotDocForRead(businessName, raw) {
     }
     return data;
   }
-  const pay = data.payload && typeof data.payload === "object" ? data.payload : {};
-  const rawStu =
-    data.students !== undefined && data.students !== null
-      ? data.students
-      : data.Students !== undefined
-        ? data.Students
-        : data.studentList !== undefined
-          ? data.studentList
-          : pay.students !== undefined
-            ? pay.students
-            : pay.Students;
-  const rawExp =
-    data.expenses !== undefined && data.expenses !== null
-      ? data.expenses
-      : data.Expenses !== undefined
-        ? data.Expenses
-        : data.expenseList !== undefined
-          ? data.expenseList
-          : pay.expenses !== undefined
-            ? pay.expenses
-            : pay.Expenses;
+  const rawStu = pickBestStudentsRaw_(data);
+  const rawExp = pickBestExpensesRaw_(data);
   data.students = coerceFirestoreArray(rawStu);
   data.expenses = coerceFirestoreArray(rawExp);
   delete data.Students;

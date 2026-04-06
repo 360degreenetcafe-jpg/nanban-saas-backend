@@ -56,10 +56,17 @@ function createNanbanWebIntegrationApp({ getWriteKey }) {
       res.setHeader("Pragma", "no-cache");
       res.setHeader("Expires", "0");
       const data = await getBusinessSnapshotDoc(business);
+      const stuOut = Array.isArray(data.students) ? data.students : [];
+      const expOut = Array.isArray(data.expenses) ? data.expenses : [];
+      info("NANBAN_WEB_SNAPSHOT_GET", {
+        business,
+        studentsLen: stuOut.length,
+        expensesLen: expOut.length
+      });
       res.json({
         ok: true,
-        students: Array.isArray(data.students) ? data.students : [],
-        expenses: Array.isArray(data.expenses) ? data.expenses : [],
+        students: stuOut,
+        expenses: expOut,
         appSettings: data.appSettings || null,
         chitData: data.chitData || null,
         updated_at: data.updated_at || null
