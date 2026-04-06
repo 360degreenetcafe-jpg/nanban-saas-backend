@@ -4448,16 +4448,6 @@
                     </div>
                 </div>
 
-                <div class="glass-card" style="padding:25px; margin-bottom:20px; background:#ecfdf5; border-left:8px solid #6ee7b7;">
-                    <h3 style="margin-top:0; color:var(--primary); font-size:15px;">☁️ Firebase web integration</h3>
-                    <p style="font-size:11px; color:#065f46; margin:0 0 10px;">Must match Secret <b>NANBAN_WEB_WRITE_KEY</b> in Google Cloud.</p>
-                    <label style="font-size:12px;">Base URL</label>
-                    <input type="text" id="nanbanNativeApiBase" placeholder="https://...nanbanWebIntegration" style="margin:6px 0; width:100%; box-sizing:border-box;">
-                    <label style="font-size:12px;">Write key</label>
-                    <input type="password" id="nanbanWebWriteKey" placeholder="Empty = nanban@2026 (default)" autocomplete="off" style="margin:6px 0; width:100%; box-sizing:border-box;">
-                    <button type="button" class="btn btn-p" style="width:100%; font-size:12px; padding:12px; margin-top:8px;" onclick="saveNanbanNativeSettings(); loadNanbanNativeSettingsToForm();">💾 Save</button>
-                </div>
-
                 <div class="glass-card" style="padding:15px; margin-bottom:20px; border:1px solid #cbd5e1;">
                     <label style="color:var(--primary); font-weight:800;">📢 Bulk announcement</label>
                     <textarea id="bulkMessageText" rows="3" placeholder="Message to all active students..." style="margin:10px 0; font-size:13px;"></textarea>
@@ -4729,12 +4719,15 @@
     let firebaseAuth = null;
     let ENABLE_SAAS_EXPERIMENT = false; // Production freeze default; staging only.
     const FORCE_LOCAL_STABLE_LOGIN = true; // No bridge dependency for production login.
-    /** HTTPS backend: snapshot + WhatsApp jobs (Secret: NANBAN_WEB_WRITE_KEY). */
-    const NANBAN_NATIVE_API_DEFAULT = "https://asia-south1-nanban-driving-school-d7b20.cloudfunctions.net/nanbanWebIntegration";
-    const NANBAN_NATIVE_API_LS = "nanban_native_api_base";
-    const NANBAN_WEB_WRITE_LS = "nanban_web_write_key";
-    /** Matches Secret Manager NANBAN_WEB_WRITE_KEY when browser has no saved key. */
-    const NANBAN_WEB_WRITE_DEFAULT = "nanban@2026";
+    /** Nanban HTTPS backend (snapshot + /v1/rpc + WA jobs). Auth is fixed; no user configuration. */
+    const NANBAN_NATIVE_API_URL = "https://asia-south1-nanban-driving-school-d7b20.cloudfunctions.net/nanbanWebIntegration";
+    const NANBAN_NATIVE_WRITE_KEY = "nanban@2026";
+    (function flushLegacyNanbanNativeAuth_() {
+        try {
+            localStorage.removeItem("nanban_web_write_key");
+            localStorage.removeItem("nanban_native_api_base");
+        } catch (e) {}
+    })();
     let authLoginMode = 'legacy';
     const SAAS_STAGING_FLAG_KEY = 'nanban_saas_staging_enabled';
     const TENANT_CODE_KEY = 'nanban_tenant_code';
@@ -5505,7 +5498,7 @@
                 if (o.j && o.j.result && o.j.result.message) err = String(o.j.result.message);
                 if (o.r.status === 401 || String(err).toLowerCase().indexOf("unauthorized") !== -1) {
                     err =
-                        "unauthorized — Open ⚙️ Settings → Firebase: clear Web write key & Save (uses default), or set exactly nanban@2026";
+                        "unauthorized — Cloud Function rejected the request (check deployment / server key).";
                 }
                 throw new Error(err || 'rpc_failed');
             }
@@ -5684,13 +5677,13 @@
     }
 
     function getNanbanNativeApiBase_() {
-        return String(localStorage.getItem(NANBAN_NATIVE_API_LS) || NANBAN_NATIVE_API_DEFAULT).trim().replace(/\/$/, "");
+        return String(NANBAN_NATIVE_API_URL).trim().replace(/\/$/, "");
     }
     function getNanbanWebWriteKey_() {
-        return String(localStorage.getItem(NANBAN_WEB_WRITE_LS) || NANBAN_WEB_WRITE_DEFAULT).trim();
+        return NANBAN_NATIVE_WRITE_KEY;
     }
     function nanbanNativeConfigured_() {
-        return !!getNanbanWebWriteKey_();
+        return true;
     }
     async function nanbanFetchSnapshot_() {
         if (!nanbanNativeConfigured_()) return null;
@@ -5744,22 +5737,8 @@
             console.warn("nanbanQueueWaJob_", e);
         }
     }
-    function saveNanbanNativeSettings() {
-        let baseEl = document.getElementById("nanbanNativeApiBase");
-        let keyEl = document.getElementById("nanbanWebWriteKey");
-        let base = baseEl ? String(baseEl.value || "").trim() : "";
-        let key = keyEl ? String(keyEl.value || "").trim() : "";
-        if (base) localStorage.setItem(NANBAN_NATIVE_API_LS, base);
-        if (key) localStorage.setItem(NANBAN_WEB_WRITE_LS, key);
-        else try { localStorage.removeItem(NANBAN_WEB_WRITE_LS); } catch (e) {}
-        showToast("Firebase native settings saved", "success");
-    }
-    function loadNanbanNativeSettingsToForm() {
-        let b = document.getElementById("nanbanNativeApiBase");
-        let k = document.getElementById("nanbanWebWriteKey");
-        if (b) b.value = getNanbanNativeApiBase_();
-        if (k) k.value = getNanbanWebWriteKey_();
-    }
+    function saveNanbanNativeSettings() {}
+    function loadNanbanNativeSettingsToForm() {}
 
     async function fbGetSnapshotDoc(businessName) {
         if (!firebaseReady || !firebaseDb) return null;
@@ -12496,10 +12475,6 @@
         var p = el ? String(el.value || '').replace(/\D/g, '') : '';
         if (p.length !== 10) {
             showToast('Enter your 10-digit WhatsApp number', 'danger');
-            return;
-        }
-        if (typeof nanbanNativeConfigured_ === 'function' && !nanbanNativeConfigured_()) {
-            showToast('Set Firebase integration URL + write key above first', 'warning');
             return;
         }
         showLoader('Queueing WhatsApp test...');
