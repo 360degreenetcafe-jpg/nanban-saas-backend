@@ -36,6 +36,10 @@ function assertTrue(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function loadPayloads() {
   const p = path.join(__dirname, "wa.integration.payloads.json");
   return JSON.parse(fs.readFileSync(p, "utf8")).flows;
@@ -151,13 +155,22 @@ function toPubSubEventFromStoredPayload(storedPayload, messageId) {
 async function drainInboundMockEventsAndRunWorker(inboundWorker) {
   const db = admin.firestore();
   const col = db.collection("_test_runtime").doc("wa_inbound_mock").collection("events");
-  const snap = await col.get();
-  for (const doc of snap.docs) {
-    const payload = doc.data()?.payload;
-    if (payload) {
-      await inboundWorker(toPubSubEventFromStoredPayload(payload, doc.id));
+  const maxRounds = 12;
+
+  for (let round = 0; round < maxRounds; round += 1) {
+    const snap = await col.limit(50).get();
+    if (snap.empty) return;
+
+    for (const doc of snap.docs) {
+      const payload = doc.data()?.payload;
+      if (payload) {
+        await inboundWorker(toPubSubEventFromStoredPayload(payload, doc.id));
+      }
+      await doc.ref.delete();
     }
-    await doc.ref.delete();
+
+    // Allow async mock publish writes to settle between rounds.
+    await sleep(60);
   }
 }
 
@@ -184,6 +197,16 @@ async function getLatestOutboundMockForPhone(phone) {
     .get();
   if (snap.empty) return null;
   return { id: snap.docs[0].id, ...snap.docs[0].data() };
+}
+
+async function waitForLatestOutboundMockForPhone(phone, timeoutMs = 5000) {
+  const started = Date.now();
+  while (Date.now() - started <= timeoutMs) {
+    const found = await getLatestOutboundMockForPhone(phone);
+    if (found) return found;
+    await sleep(120);
+  }
+  return null;
 }
 
 async function setBackendMode(mode) {
@@ -248,7 +271,7 @@ async function run() {
     // Flow 2: Specific service select
     await postWebhook(webhookSrv.baseUrl, payloads.flow2_select_service_dynamic_pricing.webhookPayload);
     await drainInboundMockEventsAndRunWorker(inboundWorker);
-    const flow2Msg = await getLatestOutboundMockForPhone("919900000002");
+    const flow2Msg = await waitForLatestOutboundMockForPhone("919900000002");
     assertTrue(!!flow2Msg, "Flow2: outbound not generated");
     assertTrue(String(flow2Msg.message || "").includes("₹3000"), "Flow2: expected ₹3000 missing");
 
