@@ -190,7 +190,8 @@ async function handleErpRpc(action, rawArgs) {
         return {
           status: "success",
           students: Array.isArray(snap.students) ? snap.students : [],
-          expenses: Array.isArray(snap.expenses) ? snap.expenses : []
+          expenses: Array.isArray(snap.expenses) ? snap.expenses : [],
+          appSettings: snap.appSettings && typeof snap.appSettings === "object" ? snap.appSettings : {}
         };
       }
 

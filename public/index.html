@@ -4616,9 +4616,66 @@
             }
         }
     }
+    function ensureNanbanAppSettingsShape_() {
+        if (!appSettings || typeof appSettings !== 'object') {
+            appSettings = {
+                appSettings: { services: ["2 வீலர்", "4 வீலர்", "Combo"], expenseCategories: [], incomeCategories: [], referrers: [], trainerAlertPhone: "", chitGroups: [] },
+                serviceSplits: {},
+                vehicleKm: { current: 0, lastService: 0, nextService: 5000 }
+            };
+            return;
+        }
+        if (!appSettings.appSettings || typeof appSettings.appSettings !== 'object') {
+            appSettings.appSettings = { services: ["2 வீலர்", "4 வீலர்", "Combo"], expenseCategories: [], incomeCategories: [], referrers: [], trainerAlertPhone: "", chitGroups: [] };
+        }
+        if (!appSettings.serviceSplits || typeof appSettings.serviceSplits !== 'object') appSettings.serviceSplits = {};
+        if (!appSettings.vehicleKm || typeof appSettings.vehicleKm !== 'object') {
+            appSettings.vehicleKm = { current: 0, lastService: 0, nextService: 5000 };
+        }
+    }
+
+    function ensureNanbanClientState_() {
+        if (!Array.isArray(studentsData)) studentsData = [];
+        if (!Array.isArray(expensesData)) expensesData = [];
+        ensureNanbanAppSettingsShape_();
+        if (!chitData || typeof chitData !== 'object') {
+            chitData = { groups: [], members: [], auctions: [], payments: [], bids: [] };
+        }
+        ['groups', 'members', 'auctions', 'payments', 'bids'].forEach(function(k) {
+            if (!Array.isArray(chitData[k])) chitData[k] = [];
+        });
+    }
+
+    function nanbanStudentType_(s) {
+        if (!s) return '';
+        var t = s.type != null ? s.type : s.Type;
+        return String(t || '').trim();
+    }
+
+    function nanbanIsEnquiryStudent_(s) {
+        if (!s || s.status === 'Deleted') return false;
+        var t = nanbanStudentType_(s).toLowerCase();
+        if (t === 'enquiry' || t === 'enquiries') return true;
+        if (t.indexOf('enquiry') !== -1) return true;
+        var st = String(s.status || '').toLowerCase();
+        if (st === 'enquiry') return true;
+        return false;
+    }
+
+    function resolveNanbanMediaUrl_(raw) {
+        if (raw == null) return '';
+        var u = String(raw).trim();
+        if (!u || u === 'undefined') return '';
+        if (u.indexOf('data:') === 0 || u.indexOf('http://') === 0 || u.indexOf('https://') === 0 || u.indexOf('blob:') === 0) return u;
+        if (/^[a-zA-Z0-9_-]{25,}$/.test(u) && u.indexOf('/') === -1) {
+            return 'https://drive.google.com/file/d/' + u + '/view';
+        }
+        return u;
+    }
+
     // 🛡️ SHARED STAGE-AWARE PENDING LOGIC (Ensure Card matches List exactly!)
     function getStudentPendingDetails(s) {
-        if (!s || s.status === 'Deleted' || s.type === 'Enquiry' || s.status === 'License_Completed' || s.status === 'Inactive') return null;
+        if (!s || s.status === 'Deleted' || nanbanIsEnquiryStudent_(s) || s.status === 'License_Completed' || s.status === 'Inactive') return null;
         
         let isOld = String(s.status).includes('Old') || String(s.type).includes('Old') || String(s.id).includes('OLD');
         if (isOld) return null;
@@ -5826,6 +5883,10 @@
                 studentsData = nanbanCoerceJsonArray_(res.students);
                 ensureStudentFeesResolved_(studentsData);
                 expensesData = nanbanCoerceJsonArray_(res.expenses);
+                if (res.appSettings && typeof res.appSettings === 'object') {
+                    appSettings = Object.assign({}, appSettings, res.appSettings);
+                }
+                ensureNanbanClientState_();
                 nanbanLastSyncAt = Date.now();
                 localStorage.setItem('nanban_db_cache', JSON.stringify({ students: studentsData, expenses: expensesData }));
                 try {
@@ -6474,14 +6535,17 @@
                         if (snapOk) {
                             var sSnap = nanbanCoerceJsonArray_(j.students);
                             var eSnap = nanbanCoerceJsonArray_(j.expenses);
-                            if (sSnap.length >= studentsData.length) {
+                            if (sSnap.length > 0) {
                                 studentsData = sSnap;
                                 ensureStudentFeesResolved_(studentsData);
                             }
-                            if (eSnap.length >= expensesData.length) {
+                            if (eSnap.length > 0) {
                                 expensesData = eSnap;
                             }
-                            if (j.appSettings) appSettings = j.appSettings;
+                            if (j.appSettings && typeof j.appSettings === 'object') {
+                                appSettings = Object.assign({}, appSettings, j.appSettings);
+                            }
+                            ensureNanbanClientState_();
                             if (j.chitData && typeof j.chitData === 'object') {
                                 chitData = Object.assign(
                                     { groups: [], members: [], auctions: [], payments: [], bids: [] },
@@ -6529,10 +6593,13 @@
                     showLoader("Syncing data from Firebase...");
                     let snap = await fbGetSnapshotDoc('Nanban');
                     let data = snap || {};
-                    studentsData = Array.isArray(data.students) ? data.students : [];
-                    expensesData = Array.isArray(data.expenses) ? data.expenses : [];
+                    studentsData = nanbanCoerceJsonArray_(data.students);
+                    expensesData = nanbanCoerceJsonArray_(data.expenses);
                     chitData = data.chitData || { groups: [], members: [], auctions: [], payments: [], bids: [] };
-                    if (data.appSettings) appSettings = data.appSettings;
+                    if (data.appSettings && typeof data.appSettings === 'object') {
+                        appSettings = Object.assign({}, appSettings, data.appSettings);
+                    }
+                    ensureNanbanClientState_();
                     nanbanLastSyncAt = Date.now();
                     localStorage.setItem('nanban_db_cache', JSON.stringify({ students: studentsData, expenses: expensesData }));
                     localStorage.setItem('nanban_chit_cache', JSON.stringify(chitData));
@@ -6572,9 +6639,13 @@
             try {
                 let res = await apiCall_('getDatabaseData');
                 if (res && res.status === 'success') {
-                    studentsData = res.students || [];
+                    studentsData = nanbanCoerceJsonArray_(res.students);
                     ensureStudentFeesResolved_(studentsData);
-                    expensesData = res.expenses || [];
+                    expensesData = nanbanCoerceJsonArray_(res.expenses);
+                    if (res.appSettings && typeof res.appSettings === 'object') {
+                        appSettings = Object.assign({}, appSettings, res.appSettings);
+                    }
+                    ensureNanbanClientState_();
                     nanbanLastSyncAt = Date.now();
                     localStorage.setItem('nanban_db_cache', JSON.stringify({ students: studentsData, expenses: expensesData }));
                     try {
@@ -6805,9 +6876,13 @@
             try {
                 let res = await apiCall_('getDatabaseData');
                 if (res && res.status === 'success') {
-                    studentsData = res.students || [];
+                    studentsData = nanbanCoerceJsonArray_(res.students);
                     ensureStudentFeesResolved_(studentsData);
-                    expensesData = res.expenses || [];
+                    expensesData = nanbanCoerceJsonArray_(res.expenses);
+                    if (res.appSettings && typeof res.appSettings === 'object') {
+                        appSettings = Object.assign({}, appSettings, res.appSettings);
+                    }
+                    ensureNanbanClientState_();
                     nanbanLastSyncAt = Date.now();
                     localStorage.setItem('nanban_db_cache', JSON.stringify({ students: studentsData, expenses: expensesData }));
                     try {
@@ -6828,6 +6903,7 @@
     }
 
     function renderBasedOnRole() {
+        ensureNanbanClientState_();
         if (currentUserRole !== 'Trainer') renderStudentList(); 
         if (currentUserRole === 'Trainer' || currentUserRole === 'Admin' || currentUserRole === 'Partner') renderTrainerPanel(); 
         if (currentUserRole === 'Admin' || currentUserRole === 'Partner') { 
@@ -7023,7 +7099,8 @@
         requestAnimationFrame(function(n) { tick(n); });
     }
 
-    function updateDashboard() { 
+    function updateDashboard() {
+        ensureNanbanClientState_();
         let rawToday = getISTDate(); 
         let d1 = rawToday.split('/').map(Number).join('/'); 
         let dObj = new Date(); 
@@ -7047,7 +7124,7 @@
             }
             
             // Admissions tracking (existing)
-            if (s.status !== 'Deleted' && s.type !== 'Enquiry') {
+            if (s.status !== 'Deleted' && !nanbanIsEnquiryStudent_(s)) {
                 let d2 = (s.dateJoined || "").split('/').map(Number).join('/'); 
                 if (d1 === d2) { 
                     admToday++; 
@@ -7081,24 +7158,27 @@
             
             let att = Array.isArray(s.attendanceHistory) ? s.attendanceHistory : []; 
             att.forEach(function(a) { 
-                if (a.includes(rawToday) && a.includes('✅')) {
+                var ax = String(a || '');
+                if (ax.indexOf(rawToday) !== -1 && ax.indexOf('✅') !== -1) {
                     classesTakenToday++; 
                 }
             });
         });
         
         let expToday = 0; let expMonth = 0;
-        expensesData.forEach(function(e) { 
-            let isInc = e.cat.includes("வரவு") || e.cat.includes("(In)"); 
+        expensesData.forEach(function(e) {
+            if (!e || typeof e !== 'object') return;
+            var cat = String(e.cat != null ? e.cat : '');
+            let isInc = cat.indexOf("வரவு") !== -1 || cat.indexOf("(In)") !== -1; 
             let amt = parseInt(e.amt) || 0; 
             let d2 = (e.date || "").split('/').map(Number).join('/'); 
             let parts = (e.date || "").split('/'); 
             let isCurrMonth = (parts.length === 3 && Number(parts[1]) === Number(currMonth) && Number(parts[2]) === Number(currYear)); 
             
-            if (!isInc && !e.cat.includes("Spot Pending")) { 
+            if (!isInc && cat.indexOf("Spot Pending") === -1) { 
                 if (d1 === d2) expToday += amt; 
                 if (isCurrMonth) expMonth += amt; 
-            } else if (e.cat.includes("Spot Collection") || e.cat.includes("வரவு")) { 
+            } else if (cat.indexOf("Spot Collection") !== -1 || cat.indexOf("வரவு") !== -1) { 
                 if (d1 === d2) { colTodayTotal += amt; colTodayTrainer += amt; } 
                 if (isCurrMonth) { colMonthTotal += amt; } 
             } 
@@ -7130,7 +7210,7 @@
             let llrExpirySoon = [];
 
             studentsData.forEach(s => {
-                if (s.status === 'Deleted' || s.type === 'Enquiry' || s.status === 'License_Completed') return;
+                if (s.status === 'Deleted' || nanbanIsEnquiryStudent_(s) || s.status === 'License_Completed') return;
                 
                 if (s.llrStatus === 'Yes' && s.llrDate && !s.testDate) {
                     let dParts = s.llrDate.split('-');
@@ -7410,7 +7490,7 @@
                 title = kind === 'today_collection_office' ? "Today Office Collection" : (kind === 'today_collection_trainer' ? "Today Trainer Collection" : "Today Collection");
                 let list = [];
                 studentsData.forEach(function(s) {
-                    if (!s || s.status === 'Deleted' || s.type === 'Enquiry') return;
+                    if (!s || s.status === 'Deleted' || nanbanIsEnquiryStudent_(s)) return;
                     let pays = Array.isArray(s.paymentHistory) ? s.paymentHistory : [];
                     pays.forEach(function(p) {
                         let d2 = (p.date || "").split('/').map(Number).join('/');
@@ -7453,7 +7533,7 @@
                 title = "Today Admissions";
                 let list = [];
                 studentsData.forEach(function(s) {
-                    if (!s || s.status === 'Deleted' || s.type === 'Enquiry') return;
+                    if (!s || s.status === 'Deleted' || nanbanIsEnquiryStudent_(s)) return;
                     let d2 = (s.dateJoined || "").split('/').map(Number).join('/');
                     if (d2 === d1) {
                         list.push({ id: s.id, name: s.name, phone: s.phone, service: s.service || '-', receiver: s.receiver || '' });
@@ -7524,7 +7604,7 @@
                 title = "Today Training Attendees";
                 let list = [];
                 studentsData.forEach(function(s) {
-                    if (!s || s.status === 'Deleted' || s.type === 'Enquiry') return;
+                    if (!s || s.status === 'Deleted' || nanbanIsEnquiryStudent_(s)) return;
                     let att = Array.isArray(s.attendanceHistory) ? s.attendanceHistory : [];
                     for (let i = 0; i < att.length; i++) {
                         let line = String(att[i] || "");
@@ -7555,7 +7635,7 @@
                 title = "Test Pending List";
                 let list = [];
                 studentsData.forEach(function(s) {
-                    if (!s || s.status === 'Deleted' || s.type === 'Enquiry' || s.testStatus === 'Pass' || s.status === 'License_Completed') return;
+                    if (!s || s.status === 'Deleted' || nanbanIsEnquiryStudent_(s) || s.testStatus === 'Pass' || s.status === 'License_Completed') return;
                     let tFee = parseInt(s.totalFee) || 0;
                     let adv = parseInt(s.advance) || 0;
                     let disc = parseInt(s.discount) || 0;
@@ -8108,6 +8188,7 @@
     }
 
     function renderStudentList() {
+        ensureNanbanClientState_();
         let container = document.getElementById('studentCardsContainer'); 
         if (!container) return; 
         
@@ -8157,15 +8238,15 @@
         } else if (currentFilter === 'hold') { 
             filtered = filtered.filter(s => s.status === 'Hold'); 
         } else if (currentFilter === 'enquiry') { 
-            filtered = filtered.filter(s => s.type === 'Enquiry' && s.status !== 'Deleted'); 
+            filtered = filtered.filter(s => nanbanIsEnquiryStudent_(s) && s.status !== 'Deleted'); 
         } else {
             filtered = filtered.filter(s => s.status !== 'Deleted' && s.status !== 'Hold');
             let includeLicenseCompleted = (currentFilter === 'pending' || currentFilter === 'pending_cash');
             if (!includeLicenseCompleted) { filtered = filtered.filter(s => s.status !== 'License_Completed'); }
-            if (currentFilter === 'admission') { filtered = filtered.filter(s => s.type !== 'Enquiry'); }
+            if (currentFilter === 'admission') { filtered = filtered.filter(s => !nanbanIsEnquiryStudent_(s)); }
             if (currentFilter === 'llr') { filtered = filtered.filter(s => s.type === 'LLR_Admission'); }
             if (currentFilter === 'training') { filtered = filtered.filter(s => s.type === 'Training_Admission'); }
-            if (currentFilter === 'pending') { filtered = filtered.filter(s => ((parseInt(s.totalFee)||0) - (parseInt(s.advance)||0) - (parseInt(s.discount)||0)) > 0 && s.type !== 'Enquiry'); }
+            if (currentFilter === 'pending') { filtered = filtered.filter(s => ((parseInt(s.totalFee)||0) - (parseInt(s.advance)||0) - (parseInt(s.discount)||0)) > 0 && !nanbanIsEnquiryStudent_(s)); }
             if (currentFilter === 'safe') { filtered = filtered.filter(s => s.marks >= 25); }
             if (currentFilter === 'llr_30') { 
                 let today = new Date(); 
@@ -8187,7 +8268,7 @@
             }
             if (currentFilter === 'pending_cash') { 
                 filtered = filtered.filter(function(s) { 
-                    if(s.type === 'Enquiry') return false; 
+                    if (nanbanIsEnquiryStudent_(s)) return false; 
                     let tFee = parseInt(s.totalFee) || 0;
                     let adv = parseInt(s.advance) || 0; 
                     let disc = parseInt(s.discount) || 0;
@@ -8231,7 +8312,7 @@
             else if (s.testDate && s.testStatus !== 'Pass') { testBadge = `<span style="background:var(--warning); color:white; font-size:10px; padding:2px 8px; border-radius:50px; margin-left:5px; font-weight:900;">📅 ${s.testDate}</span>`; }
             else if (s.testStatus === 'Pass') { testBadge = `<span style="background:var(--success); color:white; font-size:10px; padding:2px 8px; border-radius:50px; margin-left:5px; font-weight:900;">🏆 PASS</span>`; }
             
-            let split = s.feeSplit || appSettings.serviceSplits[s.service] || {llr:0, train:0, test:0}; 
+            let split = s.feeSplit || (appSettings && appSettings.serviceSplits && appSettings.serviceSplits[s.service]) || {llr:0, train:0, test:0}; 
             let adv = parseInt(s.advance) || 0; 
             
             let llrPaid = Math.min(adv, split.llr || 0); 
@@ -8492,6 +8573,7 @@
     }
 
     function openProfile(id) {
+        ensureNanbanClientState_();
         let s = studentsData.find(x => String(x.id) === String(id)); 
         if (!s) return; 
         editTargetId = s.id;
@@ -8530,7 +8612,9 @@
             }
 
             if (s.llrDocUrl || (s.llrStatus === 'Yes' && s.llrDate)) { 
-                llrBox.innerHTML = `<b style="color:var(--success);">ஆவணம் உள்ளது</b>` + (s.llrDocUrl ? ` <br><a href="${s.llrDocUrl}" target="_blank" style="display:inline-block; margin-top:5px; background:var(--secondary); color:white; padding:5px 10px; border-radius:8px; text-decoration:none; font-size:12px; font-weight:bold;">📄 ஆவணத்தைப் பார்க்க (VIEW)</a>` : "") + llrStatusHtml; 
+                var llrHref = resolveNanbanMediaUrl_(s.llrDocUrl || '');
+                var llrSafe = llrHref ? String(llrHref).replace(/"/g, '&quot;') : '';
+                llrBox.innerHTML = `<b style="color:var(--success);">ஆவணம் உள்ளது</b>` + (llrSafe ? ` <br><a href="${llrSafe}" target="_blank" rel="noopener" style="display:inline-block; margin-top:5px; background:var(--secondary); color:white; padding:5px 10px; border-radius:8px; text-decoration:none; font-size:12px; font-weight:bold;">📄 ஆவணத்தைப் பார்க்க (VIEW)</a>` : "") + llrStatusHtml; 
             } else { 
                 llrBox.innerHTML = `<div style="margin-top:5px;"><b style="color:var(--danger); font-size:12px;">பெண்டிங்</b><div style="margin-top:10px;"><input type="date" id="profNewLlrDate" style="padding:8px; font-size:12px; margin-bottom:5px; width:100%;"><input type="file" id="profNewLlrFile" accept=".pdf,.jpg,image/*" style="padding:8px; font-size:12px; background:white; width:100%;"></div></div>`; 
             } 
@@ -8548,7 +8632,7 @@
         let pTPB = document.getElementById('profTotalPaidBadge'); 
         if (pTPB) { 
             pTPB.innerText = 'Paid: \u20b9' + adv; 
-            let split = s.feeSplit || appSettings.serviceSplits[s.service] || {llr:0, train:0, test:0}; 
+            let split = s.feeSplit || (appSettings && appSettings.serviceSplits && appSettings.serviceSplits[s.service]) || {llr:0, train:0, test:0}; 
             
             // If student is fully paid, show all stages as ✅
             if (bal <= 0) {
@@ -9228,7 +9312,7 @@
         
         let trainees = studentsData.filter(s => {
             if (!s || s.status === 'Deleted') return false;
-            if (s.type === 'Enquiry') return false;
+            if (nanbanIsEnquiryStudent_(s)) return false;
             
             // Search filter (searches entire list)
             if (searchVal) {
@@ -9411,7 +9495,7 @@
         let searchVal = (getVal('trainerSearchBox') || '').toLowerCase();
         
         let targetTrainees = studentsData.filter(s => {
-            if (!s || s.status === 'Deleted' || s.type === 'Enquiry') return false;
+            if (!s || s.status === 'Deleted' || nanbanIsEnquiryStudent_(s)) return false;
             if (searchVal && !( (s.name || '').toLowerCase().includes(searchVal) || (s.phone || '').includes(searchVal) )) return false;
             
             if (filterType === 'today_30') return s.is30DayCompleted;
@@ -9454,7 +9538,7 @@
         let todayYmd = (new Date()).toISOString().slice(0, 10);
 
         let list = studentsData.filter(function(s) {
-            if (!s || s.status === 'Deleted' || s.type === 'Enquiry') return false;
+            if (!s || s.status === 'Deleted' || nanbanIsEnquiryStudent_(s)) return false;
             if (!s.testDate || s.testStatus === 'Pass') return false;
             if (selectedDate) return s.testDate === selectedDate;
             return s.testDate >= todayYmd;
@@ -10127,7 +10211,8 @@
         });
     }
 
-    function renderExpenseTable() { 
+    function renderExpenseTable() {
+        ensureNanbanClientState_();
         ensureExpenseMonthOptions();
         let fromDt = getVal('expFilterFrom');
         let toDt = getVal('expFilterTo');
@@ -10583,7 +10668,7 @@
             let totalOut = 0;
 
             (studentsData || []).filter(s => s && s.status !== 'Deleted').forEach(function(s) {
-                if (s.type !== 'Enquiry' && inRangeDDMM(s.dateJoined)) {
+                if (!nanbanIsEnquiryStudent_(s) && inRangeDDMM(s.dateJoined)) {
                     let adv = parseInt(s.advance) || 0;
                     let tot = parseInt(s.totalFee) || 0;
                     let bal = tot - adv;

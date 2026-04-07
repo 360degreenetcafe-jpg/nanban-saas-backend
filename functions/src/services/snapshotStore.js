@@ -122,6 +122,51 @@ function pickBestExpensesRaw_(data) {
   return bestLen <= 0 ? [] : best;
 }
 
+function pickBestEnquiriesRaw_(data) {
+  const pay = data.payload && typeof data.payload === "object" ? data.payload : {};
+  const candidates = [
+    data.enquiries,
+    data.nanban_enquiries,
+    data.Enquiries,
+    data.enquiryList,
+    pay.enquiries,
+    pay.nanban_enquiries
+  ];
+  let best = null;
+  let bestLen = -1;
+  for (const c of candidates) {
+    if (c === undefined || c === null) continue;
+    const len = coerceFirestoreArray(c).length;
+    if (len > bestLen) {
+      bestLen = len;
+      best = c;
+    }
+  }
+  return bestLen <= 0 ? [] : best;
+}
+
+function mergeNanbanEnquiriesIntoStudents_(data) {
+  const enqList = coerceFirestoreArray(pickBestEnquiriesRaw_(data));
+  if (!enqList.length) return;
+  const students = Array.isArray(data.students) ? data.students : [];
+  const seen = new Set(students.filter((x) => x && x.id != null).map((x) => String(x.id)));
+  for (const row of enqList) {
+    if (!row || typeof row !== "object") continue;
+    let rid = row.id != null ? String(row.id) : "";
+    if (rid && seen.has(rid)) continue;
+    const merged = { ...row };
+    const t0 = String(merged.type || merged.Type || "").trim();
+    if (!t0) merged.type = "Enquiry";
+    if (!rid) {
+      merged.id = `ENQ_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
+      rid = String(merged.id);
+    }
+    students.push(merged);
+    seen.add(rid);
+  }
+  data.students = students;
+}
+
 function normalizeSnapshotDocForRead(businessName, raw) {
   const id = String(businessName || "Nanban").trim() || "Nanban";
   const data = raw && typeof raw === "object" ? { ...raw } : {};
@@ -151,6 +196,7 @@ function normalizeSnapshotDocForRead(businessName, raw) {
   data.expenses = coerceFirestoreArray(rawExp);
   delete data.Students;
   delete data.Expenses;
+  mergeNanbanEnquiriesIntoStudents_(data);
   if (data.chitData !== undefined && data.chitData !== null) {
     data.chitData = coerceChitData(data.chitData);
   }
