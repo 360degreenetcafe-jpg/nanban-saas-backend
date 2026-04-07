@@ -5,6 +5,26 @@ const { verifyMetaSignature } = require("../lib/verifyMetaSignature");
 const { publishInboundWebhookEvent } = require("../services/publishInboundEvent");
 const { info, warn, error } = require("../lib/logger");
 
+/**
+ * Meta signs X-Hub-Signature-256 over the exact raw POST bytes (same bytes as JSON.parse input).
+ * We capture them via express.json({ verify }) — express.raw() was not populating req.body on
+ * Cloud Functions v2 (production logs: bodyLength 0, all signatures rejected).
+ */
+function resolveMetaWebhookRawBody(req) {
+  const rb = req.rawBody;
+  if (Buffer.isBuffer(rb) && rb.length > 0) {
+    return { buf: rb, source: "req.rawBody" };
+  }
+  const b = req.body;
+  if (Buffer.isBuffer(b) && b.length > 0) {
+    return { buf: b, source: "req.body(Buffer)" };
+  }
+  if (typeof b === "string" && b.length > 0) {
+    return { buf: Buffer.from(b, "utf8"), source: "req.body(string)" };
+  }
+  return { buf: Buffer.alloc(0), source: "none" };
+}
+
 function extractInboundMessagesCount(payload) {
   let count = 0;
   for (const entry of payload.entry || []) {
@@ -67,10 +87,20 @@ function createWebhookApp({ getVerifyToken, getAppSecret }) {
     return res.status(200).send(challenge);
   });
 
-  app.post("/wa/webhook", express.raw({ type: "application/json", limit: "1mb" }), async (req, res) => {
+  app.post(
+    "/wa/webhook",
+    express.json({
+      limit: "1mb",
+      verify: (req, res, buf) => {
+        if (Buffer.isBuffer(buf) && buf.length) {
+          req.rawBody = buf;
+        }
+      }
+    }),
+    async (req, res) => {
     const signature = req.get("x-hub-signature-256");
     const appSecret = getAppSecret();
-    const rawBody = req.body;
+    const { buf: rawBody, source: rawBodySource } = resolveMetaWebhookRawBody(req);
 
     if (!verifyMetaSignature(rawBody, signature, appSecret)) {
       const sigStr = signature ? String(signature) : "";
@@ -79,8 +109,10 @@ function createWebhookApp({ getVerifyToken, getAppSecret }) {
         JSON.stringify({
           hasSignatureHeader: !!sigStr,
           signaturePrefix: sigStr.slice(0, 24),
+          rawBodySource,
           bodyIsBuffer: Buffer.isBuffer(rawBody),
           bodyLength: Buffer.isBuffer(rawBody) ? rawBody.length : 0,
+          hasReqRawBodyField: Object.prototype.hasOwnProperty.call(req, "rawBody"),
           appSecretConfigured: !!(appSecret && String(appSecret).trim()),
           appSecretLength: appSecret ? String(appSecret).length : 0
         })
@@ -89,18 +121,17 @@ function createWebhookApp({ getVerifyToken, getAppSecret }) {
       return res.status(403).json({ error: "Invalid signature" });
     }
 
-    let parsedJson;
-    try {
-      parsedJson = JSON.parse(rawBody.toString("utf8"));
-    } catch (parseErr) {
+    const parsedJson = req.body;
+    if (parsedJson == null || typeof parsedJson !== "object" || Array.isArray(parsedJson)) {
       console.error(
         "WEBHOOK_REJECT_JSON_PARSE",
         JSON.stringify({
-          reason: String(parseErr && parseErr.message ? parseErr.message : parseErr),
-          bodyLength: Buffer.isBuffer(rawBody) ? rawBody.length : 0
+          reason: "express.json did not produce an object body",
+          bodyLength: Buffer.isBuffer(rawBody) ? rawBody.length : 0,
+          rawBodySource
         })
       );
-      warn("Webhook JSON parse failed", { reason: String(parseErr) });
+      warn("Webhook JSON body missing or invalid shape", {});
       return res.status(400).json({ error: "Invalid JSON payload" });
     }
 
@@ -152,7 +183,8 @@ function createWebhookApp({ getVerifyToken, getAppSecret }) {
       console.error("WEBHOOK_ASYNC_PUBLISH_FAILED", JSON.stringify({ reason: msg }));
       error("Webhook async processing failed", { reason: String(processingErr) });
     }
-  });
+    }
+  );
 
   app.use((err, req, res, next) => {
     error("Unhandled webhook route error", { reason: String(err) });
