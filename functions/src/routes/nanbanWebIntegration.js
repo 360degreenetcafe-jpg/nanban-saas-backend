@@ -29,7 +29,7 @@ function createNanbanWebIntegrationApp({ getWriteKey }) {
     }
     next();
   });
-  app.use(express.json({ limit: "8mb" }));
+  app.use(express.json({ limit: "16mb" }));
 
   function auth(req, res) {
     const expected = String(getWriteKey?.() || "").trim();
@@ -104,6 +104,17 @@ function createNanbanWebIntegrationApp({ getWriteKey }) {
       const db = admin.firestore();
       await db.collection("businesses").doc(business).collection("snapshot").doc("main").set(payload, { merge: true });
       info("NANBAN_WEB_SNAPSHOT_SAVED", { business, students: payload.students.length });
+      const waSt = req.body?.waAdmissionStudent;
+      if (waSt && typeof waSt === "object") {
+        const tid = String(req.body?.tenantId || "nanban_main").trim() || "nanban_main";
+        try {
+          const { notifyNanbanAfterStudentWrite_ } = require("../services/waNativeJobProcessor");
+          await notifyNanbanAfterStudentWrite_(tid, null, waSt);
+          info("NANBAN_WEB_SNAPSHOT_WA_ADMISSION", { tenantId: tid });
+        } catch (waE) {
+          warn("NANBAN_WEB_SNAPSHOT_WA_ADMISSION_FAILED", { reason: String(waE) });
+        }
+      }
       res.json({ ok: true });
     } catch (e) {
       warn("NANBAN_WEB_SNAPSHOT_POST_FAILED", { reason: String(e) });
@@ -132,12 +143,16 @@ function createNanbanWebIntegrationApp({ getWriteKey }) {
     try {
       const result = await handleErpRpc(action, args);
       const msg = result && String(result.message || "");
+      if (result && result.status === "error") {
+        console.error(`NANBAN_WEB_RPC_BUSINESS_ERROR action=${action} message=${msg}`);
+      }
       if (result && result.status === "error" && msg.includes("not implemented")) {
         res.status(501).json({ ok: false, error: "rpc_not_implemented", result });
         return;
       }
       res.json({ ok: true, result });
     } catch (e) {
+      console.error(`NANBAN_WEB_RPC_EXCEPTION action=${action} ${String(e && e.message ? e.message : e)}`);
       warn("NANBAN_WEB_RPC_FAILED", { action, reason: String(e) });
       res.status(500).json({ ok: false, error: "rpc_failed", message: String(e && e.message ? e.message : e) });
     }

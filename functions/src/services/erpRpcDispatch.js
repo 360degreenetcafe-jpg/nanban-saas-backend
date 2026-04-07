@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const admin = require("firebase-admin");
 const { getISTDateString } = require("../lib/istTime");
 const {
@@ -7,8 +8,12 @@ const {
   setRuntimeDoc
 } = require("./snapshotStore");
 const { notifyAdminsText } = require("./adminNotify");
-const { enqueueWaOutboundSend, isUsableWaMediaUrl } = require("./waOutboundQueue");
-const { inferJobKindFromStudent } = require("./waNativeJobProcessor");
+const {
+  enqueueWaOutboundSend,
+  isUsableWaMediaUrl,
+  normalizeMetaWhatsappMediaLink_
+} = require("./waOutboundQueue");
+const { inferJobKindFromStudent, notifyNanbanAfterStudentWrite_ } = require("./waNativeJobProcessor");
 const {
   normalizeChit,
   buildMemberChitPassbook,
@@ -57,6 +62,90 @@ function ensureExpenseRowWithId_(raw) {
 function nanbanTemplateCfg_(snap) {
   const a = snap?.appSettings;
   return a && typeof a === "object" ? a : {};
+}
+
+function decodeDataUrlForUpload_(dataUrl) {
+  const s = String(dataUrl || "");
+  const i = s.indexOf(",");
+  if (i === -1) return null;
+  const head = s.slice(0, i);
+  const payload = s.slice(i + 1);
+  let contentType = "application/octet-stream";
+  const ctm = head.match(/^data:([^;]+)/i);
+  if (ctm) contentType = String(ctm[1] || "").trim() || contentType;
+  const isB64 = /;base64/i.test(head);
+  try {
+    const buf = isB64
+      ? Buffer.from(payload.replace(/\s/g, ""), "base64")
+      : Buffer.from(decodeURIComponent(payload), "utf8");
+    return { buf, contentType };
+  } catch (_e) {
+    return null;
+  }
+}
+
+async function uploadBufferToDefaultBucket_({ buf, contentType, rawName }) {
+  const safe = String(rawName || "file")
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")
+    .slice(0, 180);
+  if (!safe) throw new Error("invalid_name");
+  const dest = `nanban_llr/${Date.now()}_${crypto.randomBytes(5).toString("hex")}_${safe}`;
+  const token = crypto.randomUUID();
+
+  const envBucket = String(process.env.NANBAN_STORAGE_BUCKET || process.env.FIREBASE_STORAGE_BUCKET || "").trim();
+  const projectId = String(process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || "").trim();
+  /** New projects often use .firebasestorage.app; older ones use .appspot.com. Wrong name → 404 / permission errors. */
+  const bucketCandidates = envBucket
+    ? [envBucket]
+    : projectId
+      ? [`${projectId}.firebasestorage.app`, `${projectId}.appspot.com`]
+      : [];
+
+  let lastErr;
+  const trySave = async (bucket) => {
+    const file = bucket.file(dest);
+    await file.save(buf, {
+      resumable: false,
+      metadata: {
+        contentType: contentType || "application/octet-stream",
+        metadata: {
+          firebaseStorageDownloadTokens: token
+        }
+      }
+    });
+    const enc = encodeURIComponent(dest);
+    const url = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${enc}?alt=media&token=${token}`;
+    return { url, id: dest, bucket: bucket.name };
+  };
+
+  for (const name of bucketCandidates) {
+    try {
+      const bucket = admin.storage().bucket(name);
+      const out = await trySave(bucket);
+      console.log(`NANBAN_LLR_UPLOAD_OK bucket=${out.bucket} bytes=${buf.length} dest=${dest}`);
+      return { url: out.url, id: out.id };
+    } catch (err) {
+      lastErr = err;
+      console.error(
+        `NANBAN_LLR_UPLOAD_TRY_FAILED bucket=${name} code=${err?.code || ""} msg=${String(err?.message || err)}`
+      );
+    }
+  }
+
+  try {
+    const bucket = admin.storage().bucket();
+    const out = await trySave(bucket);
+    console.log(`NANBAN_LLR_UPLOAD_OK bucket=${out.bucket} bytes=${buf.length} dest=${dest} (admin default)`);
+    return { url: out.url, id: out.id };
+  } catch (err) {
+    lastErr = err;
+    console.error(
+      `NANBAN_LLR_UPLOAD_TRY_FAILED bucket=(default) code=${err?.code || ""} msg=${String(err?.message || err)}`
+    );
+  }
+
+  console.error(`NANBAN_LLR_UPLOAD_ALL_FAILED last=${String(lastErr?.message || lastErr)}`);
+  throw lastErr || new Error("storage_upload_failed_all_buckets");
 }
 
 function popTenantFromArgs(args) {
@@ -250,9 +339,21 @@ async function handleErpRpc(action, rawArgs) {
         s.phone = normPhone10(s.phone);
         const snap = await getBusinessSnapshotDoc("Nanban");
         let students = Array.isArray(snap.students) ? [...snap.students] : [];
+        const prev = students.find((x) => String(x.id) === String(s.id)) || null;
         students = students.filter((x) => String(x.id) !== String(s.id));
         students.unshift(s);
         await saveNanbanPartial({ students });
+        try {
+          await notifyNanbanAfterStudentWrite_(tenantId, prev, s);
+        } catch (waErr) {
+          console.error(
+            `NANBAN_NOTIFY_WA_FAILED saveStudentData student=${s.id} ${String(waErr?.message || waErr)}`
+          );
+          await notifyAdminsText(
+            tenantId,
+            `⚠️ Admission WA notify failed (student ${s.id}): ${String(waErr?.message || waErr)}`
+          );
+        }
         return { status: "success" };
       }
 
@@ -263,7 +364,7 @@ async function handleErpRpc(action, rawArgs) {
         let students = Array.isArray(snap.students) ? [...snap.students] : [];
         const ix = students.findIndex((x) => String(x.id) === String(s.id));
         if (ix < 0) return { status: "error", message: "Not found" };
-        const prev = students[ix];
+        const prev = { ...students[ix] };
         const patch = typeof s === "object" && s ? { ...s } : {};
         const phoneNorm = normPhone10(patch.phone != null ? patch.phone : prev.phone);
         students[ix] = Object.assign({}, prev, patch, {
@@ -271,6 +372,17 @@ async function handleErpRpc(action, rawArgs) {
           phone: phoneNorm || prev.phone
         });
         await saveNanbanPartial({ students });
+        try {
+          await notifyNanbanAfterStudentWrite_(tenantId, prev, students[ix]);
+        } catch (waErr) {
+          console.error(
+            `NANBAN_NOTIFY_WA_FAILED updateStudentData student=${s.id} ${String(waErr?.message || waErr)}`
+          );
+          await notifyAdminsText(
+            tenantId,
+            `⚠️ Student update WA notify failed (${s.id}): ${String(waErr?.message || waErr)}`
+          );
+        }
         return { status: "success" };
       }
 
@@ -1015,19 +1127,12 @@ async function handleErpRpc(action, rawArgs) {
         const snap = await getBusinessSnapshotDoc("Nanban");
         const s = (snap.students || []).find((x) => String(x.id) === String(studentId));
         if (!s) return { status: "error", message: "Student Not Found" };
-        const kind = inferJobKindFromStudent(s);
-        await admin
-          .firestore()
-          .collection("tenants")
-          .doc(tenantId)
-          .collection("wa_native_jobs")
-          .add({
-            status: "pending",
-            kind,
-            student: s,
-            source: "rpc_sendWelcomeMessageAction",
-            created_at: admin.firestore.FieldValue.serverTimestamp()
-          });
+        const { processWaNativeJob } = require("./waNativeJobProcessor");
+        try {
+          await processWaNativeJob(tenantId, { student: s, kind: inferJobKindFromStudent(s) });
+        } catch (e) {
+          return { status: "error", message: String(e?.message || e) };
+        }
         return { status: "success" };
       }
 
@@ -2052,7 +2157,7 @@ async function handleErpRpc(action, rawArgs) {
           const tpl = cfg.dayCloseTemplate || "day_close_report";
           const sampleReport =
             `🏁 *DAY CLOSE (சோதனை)*\n📅 ${dateStr}\n🚗 KM: 25\n💰 வசூல்: ₹5000\n🔴 செலவு: ₹200\n🤝 ஒப்படைப்பு: ₹4800`;
-          const headerImg = String(cfg.quizHeaderImageUrl || "").trim();
+          const headerImg = normalizeMetaWhatsappMediaLink_(String(cfg.quizHeaderImageUrl || "").trim());
           const tPayload = {
             name: tpl,
             languageCode: "ta",
@@ -2079,12 +2184,34 @@ async function handleErpRpc(action, rawArgs) {
       }
 
       case "uploadFileToDrive":
-      case "processFileUpload":
-        return {
-          status: "error",
-          message:
-            "Drive upload is not available in Firebase native mode. Use client-side storage (e.g. Firebase Storage) in a future update."
-        };
+      case "processFileUpload": {
+        const dataUrl = args[0];
+        const name = String(args[1] || "document.bin");
+        const dec = decodeDataUrlForUpload_(dataUrl);
+        if (!dec || !dec.buf || !dec.buf.length) {
+          console.error("[NANBAN_RPC_UPLOAD] Invalid or empty file data (decode failed)");
+          return { status: "error", message: "Invalid or empty file data" };
+        }
+        if (dec.buf.length > 12 * 1024 * 1024) {
+          console.error(`[NANBAN_RPC_UPLOAD] Too large: ${dec.buf.length} bytes`);
+          return { status: "error", message: "File too large (max 12 MB)" };
+        }
+        try {
+          const { url, id } = await uploadBufferToDefaultBucket_({
+            buf: dec.buf,
+            contentType: dec.contentType,
+            rawName: name
+          });
+          return { status: "success", url, id };
+        } catch (upErr) {
+          const msg = String(upErr?.message || upErr);
+          console.error(`[NANBAN_RPC_UPLOAD_EXCEPTION] ${msg}`);
+          return {
+            status: "error",
+            message: `Storage upload failed: ${msg}. Check Cloud Function service account has Storage Object Admin (or Creator+Viewer) on the default bucket, or set NANBAN_STORAGE_BUCKET.`
+          };
+        }
+      }
 
       default:
         return {
@@ -2094,7 +2221,9 @@ async function handleErpRpc(action, rawArgs) {
         };
     }
   } catch (e) {
-    return { status: "error", message: String(e && e.message ? e.message : e) };
+    const em = String(e && e.message ? e.message : e);
+    console.error(`NANBAN_ERP_RPC_TOP_CATCH action=${act} ${em}`);
+    return { status: "error", message: em };
   }
 }
 
