@@ -46,6 +46,14 @@ function waE164_(phone) {
   return d.length === 10 ? `91${d}` : "";
 }
 
+function ensureExpenseRowWithId_(raw) {
+  const row = raw && typeof raw === "object" ? { ...raw } : {};
+  if (!String(row.id || "").trim()) {
+    row.id = `exp_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
+  }
+  return row;
+}
+
 function nanbanTemplateCfg_(snap) {
   const a = snap?.appSettings;
   return a && typeof a === "object" ? a : {};
@@ -261,12 +269,16 @@ async function handleErpRpc(action, rawArgs) {
       }
 
       case "saveExpenseData": {
-        const e = args[0];
+        const raw = args[0];
+        if (!raw || typeof raw !== "object") return { status: "error", message: "Invalid expense" };
+        const e = ensureExpenseRowWithId_(raw);
         const snap = await getBusinessSnapshotDoc("Nanban");
         const expenses = Array.isArray(snap.expenses) ? [...snap.expenses] : [];
+        const dup = e.id && expenses.some((x) => x && String(x.id) === String(e.id));
+        if (dup) return { status: "error", message: "Duplicate expense id" };
         expenses.push(e);
         await saveNanbanPartial({ expenses });
-        return { status: "success" };
+        return { status: "success", expense: e };
       }
 
       case "getKmTodayAction": {
@@ -916,20 +928,29 @@ async function handleErpRpc(action, rawArgs) {
         const snap = await getBusinessSnapshotDoc("Nanban");
         const expenses = Array.isArray(snap.expenses) ? [...snap.expenses] : [];
         let hit = -1;
-        for (let i = 0; i < expenses.length; i++) {
-          const row = expenses[i] || {};
-          const d = String(row.date || "").trim();
-          const sp = String(row.spender || "").trim();
-          const c = String(row.cat || "").trim();
-          const a = parseInt(row.amt, 10) || 0;
-          const ds = String(row.desc || "").trim();
-          if (d === oldDate && sp === oldSpender && c === oldCat && a === oldAmt && ds === oldDesc) {
-            hit = i;
-            break;
+        const targetId = String(expObj?.id || "").trim();
+        if (targetId) {
+          hit = expenses.findIndex((row) => row && String(row.id || "") === targetId);
+        }
+        if (hit < 0) {
+          for (let i = 0; i < expenses.length; i++) {
+            const row = expenses[i] || {};
+            const d = String(row.date || "").trim();
+            const sp = String(row.spender || "").trim();
+            const c = String(row.cat || "").trim();
+            const a = parseInt(row.amt, 10) || 0;
+            const ds = String(row.desc || "").trim();
+            if (d === oldDate && sp === oldSpender && c === oldCat && a === oldAmt && ds === oldDesc) {
+              hit = i;
+              break;
+            }
           }
         }
         if (hit < 0) return { status: "error", message: "Expense row not found" };
         const updated = { ...expenses[hit], amt: amt2, desc: desc2 };
+        if (!String(updated.id || "").trim()) {
+          updated.id = ensureExpenseRowWithId_(updated).id;
+        }
         expenses[hit] = updated;
         await saveNanbanPartial({ expenses });
         await notifyAdminsText(

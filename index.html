@@ -5542,6 +5542,46 @@
         return unifiedRunCall_(String(fnName || ''), args);
     }
 
+    /**
+     * Income/expense line items → Firestore snapshot (native/bridge) or Apps Script.
+     * On success, appends the saved row (with server id when native) to expensesData.
+     */
+    function saveExpenseDataUnified_(ne, onSuccess, onFail) {
+        if (nanbanNativeConfigured_() || isBridgeConfigured_()) {
+            apiCall_('saveExpenseData', ne)
+                .then(function(r) {
+                    if (r && r.status === 'success') {
+                        var row = r.expense || ne;
+                        expensesData.push(row);
+                        if (typeof onSuccess === 'function') onSuccess(r, row);
+                    } else if (typeof onFail === 'function') {
+                        onFail((r && r.message) ? r.message : 'Save failed');
+                    }
+                })
+                .catch(function(err) {
+                    if (typeof onFail === 'function') {
+                        onFail(err && err.message ? err.message : String(err));
+                    }
+                });
+            return;
+        }
+        google.script.run
+            .withSuccessHandler(function(r) {
+                if (r && r.status === 'success') {
+                    expensesData.push(ne);
+                    if (typeof onSuccess === 'function') onSuccess(r, ne);
+                } else if (typeof onFail === 'function') {
+                    onFail((r && r.message) ? r.message : 'Save failed');
+                }
+            })
+            .withFailureHandler(function(err) {
+                if (typeof onFail === 'function') {
+                    onFail(err && err.message ? err.message : String(err));
+                }
+            })
+            .saveExpenseData(ne);
+    }
+
     function createBridgeRunProxy_(successHandler, failureHandler) {
         return new Proxy({}, {
             get: function(_, prop) {
@@ -7252,15 +7292,24 @@
         // KM should be shown from server-side (trainer mobile device localStorage won't reflect on admin desktop).
         animateKmCounter(0);
         try {
-            google.script.run
-                .withSuccessHandler(function(res) {
-                    let kmVal = (res && res.status === 'success') ? parseInt(res.km) || 0 : 0;
-                    animateKmCounter(kmVal);
-                })
-                .withFailureHandler(function() {
-                    animateKmCounter(0);
-                })
-                .getKmTodayAction();
+            if (nanbanNativeConfigured_() || isBridgeConfigured_()) {
+                apiCall_('getKmTodayAction')
+                    .then(function(res) {
+                        var kmVal = (res && res.status === 'success') ? parseInt(res.km) || 0 : 0;
+                        animateKmCounter(kmVal);
+                    })
+                    .catch(function() { animateKmCounter(0); });
+            } else {
+                google.script.run
+                    .withSuccessHandler(function(res) {
+                        var kmVal = (res && res.status === 'success') ? parseInt(res.km) || 0 : 0;
+                        animateKmCounter(kmVal);
+                    })
+                    .withFailureHandler(function() {
+                        animateKmCounter(0);
+                    })
+                    .getKmTodayAction();
+            }
         } catch (e) {
             animateKmCounter(0);
         }
@@ -7526,22 +7575,32 @@
             let newDesc = prompt("Edit Description", String(e.desc || ""));
             if (newDesc === null) return;
             showLoader("Updating Expense...");
-            google.script.run
-                .withSuccessHandler(function(r) {
-                    hideLoader();
-                    if (r && r.status === 'success') {
-                        closeModal('dashPopupModal');
-                        loadDatabase();
-                        showToast("✅ Expense Updated");
-                    } else {
-                        showToast("Expense update failed", "danger");
-                    }
-                })
-                .withFailureHandler(function(err) {
-                    hideLoader();
-                    showToast("Expense update error", "danger");
-                })
-                .updateExpenseDataAction(e, newAmt, newDesc, currentUserName);
+
+            function onExpEditDone(r) {
+                hideLoader();
+                if (r && r.status === 'success') {
+                    closeModal('dashPopupModal');
+                    loadDatabase();
+                    showToast("✅ Expense Updated");
+                } else {
+                    showToast("Expense update failed", "danger");
+                }
+            }
+            function onExpEditErr() {
+                hideLoader();
+                showToast("Expense update error", "danger");
+            }
+
+            if (nanbanNativeConfigured_() || isBridgeConfigured_()) {
+                apiCall_('updateExpenseDataAction', e, newAmt, newDesc, currentUserName)
+                    .then(onExpEditDone)
+                    .catch(onExpEditErr);
+            } else {
+                google.script.run
+                    .withSuccessHandler(onExpEditDone)
+                    .withFailureHandler(onExpEditErr)
+                    .updateExpenseDataAction(e, newAmt, newDesc, currentUserName);
+            }
         } catch (err) {
             showToast("Edit expense error", "danger");
         }
@@ -7947,38 +8006,32 @@
             
             let govtTypeDesc = (type === 'Test_Admission') ? '🔴 செலவு - Govt Fee (Test)' : '🔴 செலவு - Govt Fee (LLR)'; 
             let govt = parseInt(getVal('autoExpGovt')) || 0; 
-            if (govt > 0) { 
-                let ne = { date: getISTDate(), spender: logName, cat: govtTypeDesc, amt: govt, desc: name + " (Govt Fee)" }; 
+            if (govt > 0) {
+                let ne = { date: getISTDate(), spender: logName, cat: govtTypeDesc, amt: govt, desc: name + " (Govt Fee)" };
                 if (fastUiMode) {
-                    expensesData.push(ne);
-                    if (gasSave) { try { google.script.run.saveExpenseData(ne); } catch (e) {} }
+                    if (nanbanNativeConfigured_() || isBridgeConfigured_()) {
+                        saveExpenseDataUnified_(ne, function() { try { renderExpenseTable(); updateDashboard(); } catch (e) {} }, function() {});
+                    } else {
+                        expensesData.push(ne);
+                        if (gasSave) { try { google.script.run.saveExpenseData(ne); } catch (e) {} }
+                    }
                 } else {
-                    google.script.run
-                        .withSuccessHandler(function(r) { 
-                            if (r && r.status === 'success') { 
-                                expensesData.push(ne);
-                                try { renderExpenseTable(); updateDashboard(); } catch(e) {}
-                            }
-                        })
-                        .saveExpenseData(ne); 
+                    saveExpenseDataUnified_(ne, function() { try { renderExpenseTable(); updateDashboard(); } catch (e) {} }, function() {});
                 }
             }
-            
-            let otherExp = parseInt(getVal('autoExpRto')) || 0; 
-            if (otherExp > 0) { 
-                let ne = { date: getISTDate(), spender: logName, cat: '🔴 செலவு - மற்றவை (Admission)', amt: otherExp, desc: name + " (Other)" }; 
+
+            let otherExp = parseInt(getVal('autoExpRto')) || 0;
+            if (otherExp > 0) {
+                let ne = { date: getISTDate(), spender: logName, cat: '🔴 செலவு - மற்றவை (Admission)', amt: otherExp, desc: name + " (Other)" };
                 if (fastUiMode) {
-                    expensesData.push(ne);
-                    if (gasSave) { try { google.script.run.saveExpenseData(ne); } catch (e) {} }
+                    if (nanbanNativeConfigured_() || isBridgeConfigured_()) {
+                        saveExpenseDataUnified_(ne, function() { try { renderExpenseTable(); updateDashboard(); } catch (e) {} }, function() {});
+                    } else {
+                        expensesData.push(ne);
+                        if (gasSave) { try { google.script.run.saveExpenseData(ne); } catch (e) {} }
+                    }
                 } else {
-                    google.script.run
-                        .withSuccessHandler(function(r) { 
-                            if (r && r.status === 'success') { 
-                                expensesData.push(ne);
-                                try { renderExpenseTable(); updateDashboard(); } catch(e) {}
-                            }
-                        })
-                        .saveExpenseData(ne); 
+                    saveExpenseDataUnified_(ne, function() { try { renderExpenseTable(); updateDashboard(); } catch (e) {} }, function() {});
                 }
             }
 
@@ -9690,18 +9743,22 @@
             amt: amt, 
             desc: desc 
         }; 
-        
-        google.script.run
-            .withSuccessHandler(function() { 
-                hideLoader(); 
-                closeModal('trainerIncomeModal'); 
-                setVal('trIncAmt', ""); 
-                setVal('trIncDesc', ""); 
-                showToast("✅ ஸ்பாட் பணம் (Pending) பதிவு செய்யப்பட்டது!"); 
-                expensesData.push(expObj); 
-                updateDashboard(); 
-            })
-            .saveExpenseData(expObj); 
+
+        saveExpenseDataUnified_(
+            expObj,
+            function() {
+                hideLoader();
+                closeModal('trainerIncomeModal');
+                setVal('trIncAmt', "");
+                setVal('trIncDesc', "");
+                showToast("✅ ஸ்பாட் பணம் (Pending) பதிவு செய்யப்பட்டது!");
+                updateDashboard();
+            },
+            function(msg) {
+                hideLoader();
+                showToast(msg || "Save failed", "danger");
+            }
+        );
     }
 
     function updateLiveKm() { 
@@ -10013,28 +10070,23 @@
         showLoader("Uploading Receipt & Saving...");
         
         uploadFileHelper('expReceiptFile').then(function(receiptUrl) {
-            let newExp = { date: getISTDate(), spender: spender, cat: cat, amt: amt, desc: desc, receiptUrl: receiptUrl }; 
-            
-            google.script.run
-                .withSuccessHandler(function(r) {
+            let newExp = { date: getISTDate(), spender: spender, cat: cat, amt: amt, desc: desc, receiptUrl: receiptUrl };
+            saveExpenseDataUnified_(
+                newExp,
+                function() {
                     hideLoader();
-                    if (r && r.status === 'success') {
-                        expensesData.push(newExp);
-                        renderExpenseTable(); 
-                        updateDashboard(); 
-                        showToast("✅ கணக்கு பதிவு செய்யப்பட்டது!"); 
-                        setVal('expAmount', ""); 
-                        setVal('expDesc', ""); 
-                        setVal('expReceiptFile', ""); // Reset file input
-                    } else {
-                        showToast((r && r.message) ? r.message : "Save failed", "danger");
-                    }
-                })
-                .withFailureHandler(function() {
+                    renderExpenseTable();
+                    updateDashboard();
+                    showToast("✅ கணக்கு பதிவு செய்யப்பட்டது!");
+                    setVal('expAmount', "");
+                    setVal('expDesc', "");
+                    setVal('expReceiptFile', "");
+                },
+                function(msg) {
                     hideLoader();
-                    showToast("Save failed", "danger");
-                })
-                .saveExpenseData(newExp);
+                    showToast(msg || "Save failed", "danger");
+                }
+            );
         });
     }
 
