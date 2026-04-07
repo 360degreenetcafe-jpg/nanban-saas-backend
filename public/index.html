@@ -7921,7 +7921,7 @@
             setHTML('lockedServiceBadge', `✅ லாக் செய்யப்பட்ட சர்வீஸ்: <b>${srv}</b>`); 
             
             activeService = srv; 
-            let splits = appSettings.serviceSplits[srv] || {test:0, govtTest:0}; 
+            let splits = (appSettings && appSettings.serviceSplits && appSettings.serviceSplits[srv]) || {test:0, govtTest:0}; 
             
             setVal('dispLlr', 0); 
             setVal('dispTrain', 0); 
@@ -7940,8 +7940,10 @@
         if (llrStatus === 'Yes' && llrDate) { 
             setDisplay('oldLlrAlert', 'flex'); 
             setHTML('oldLlrText', `✅ <b>பழைய ரெக்கார்ட்:</b> LLR முடிந்தது (${llrDate})`); 
-            if (docUrl && docUrl !== 'undefined') { 
-                setHTML('llrViewActionBox', `<a class="btn btn-s" style="padding:10px 15px; font-size:12px; margin:0;" href="${docUrl}" target="_blank">👁️ LLR காப்பியைப் பார்</a>`); 
+            var docHref = resolveNanbanMediaUrl_(docUrl);
+            if (docHref && String(docUrl) !== 'undefined') { 
+                var docSafe = String(docHref).replace(/"/g, '&quot;');
+                setHTML('llrViewActionBox', `<a class="btn btn-s" style="padding:10px 15px; font-size:12px; margin:0;" href="${docSafe}" target="_blank" rel="noopener">👁️ LLR காப்பியைப் பார்</a>`); 
             } else { 
                 setHTML('llrViewActionBox', `<span style="color:var(--text-muted); font-size:11px;">(ஆவணம் இல்லை)</span>`); 
             } 
