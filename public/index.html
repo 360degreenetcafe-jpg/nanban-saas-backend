@@ -4666,11 +4666,39 @@
         if (raw == null) return '';
         var u = String(raw).trim();
         if (!u || u === 'undefined') return '';
-        if (u.indexOf('data:') === 0 || u.indexOf('http://') === 0 || u.indexOf('https://') === 0 || u.indexOf('blob:') === 0) return u;
-        if (/^[a-zA-Z0-9_-]{25,}$/.test(u) && u.indexOf('/') === -1) {
+        if (u.indexOf('data:') === 0 || u.indexOf('http://') === 0 || u.indexOf('https://') === 0 || u.indexOf('blob:') === 0) {
+            var oid = u.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+            if (oid && u.toLowerCase().indexOf('drive.google.com') !== -1) {
+                return 'https://drive.google.com/file/d/' + oid[1] + '/view';
+            }
+            return u;
+        }
+        if (/^[a-zA-Z0-9_-]{20,}$/.test(u) && u.indexOf('/') === -1) {
             return 'https://drive.google.com/file/d/' + u + '/view';
         }
         return u;
+    }
+
+    function openNanbanLlrDocument_(targetUrl) {
+        var u = String(targetUrl || "").trim();
+        if (!u) {
+            console.warn("openNanbanLlrDocument_: empty URL");
+            try { showToast("ஆவண இணைப்பு இல்லை — PDF ஏற்றவும் அல்லது Edit-ல் மீண்டும் சேமிக்கவும்.", "warning"); } catch (e) {}
+            return;
+        }
+        console.log("Opening PDF URL:", u);
+        var opened = window.open(u, "_blank", "noopener,noreferrer");
+        if (!opened) {
+            try { showToast("பாப்-அப் தடுக்கப்பட்டது. URL ஐ கைமுறையாக திறக்கவும்.", "warning"); } catch (e2) {}
+        }
+    }
+
+    function openNanbanLlrDocumentFromEncoded_(enc) {
+        try {
+            openNanbanLlrDocument_(decodeURIComponent(enc));
+        } catch (e) {
+            console.warn("openNanbanLlrDocumentFromEncoded_", e);
+        }
     }
 
     // 🛡️ SHARED STAGE-AWARE PENDING LOGIC (Ensure Card matches List exactly!)
@@ -5829,7 +5857,7 @@
         if (!r.ok) return null;
         return r.json();
     }
-    async function nanbanPushSnapshot_() {
+    async function nanbanPushSnapshot_(waAdmissionStudentOpt) {
         if (!nanbanNativeConfigured_()) return false;
         let url = getNanbanNativeApiBase_() + "/v1/snapshot";
         let body = {
@@ -5839,6 +5867,10 @@
             appSettings: appSettings || {},
             chitData: chitData || { groups: [], members: [], auctions: [], payments: [], bids: [] }
         };
+        if (waAdmissionStudentOpt && typeof waAdmissionStudentOpt === 'object') {
+            body.waAdmissionStudent = waAdmissionStudentOpt;
+            body.tenantId = "nanban_main";
+        }
         let r = await fetch(url, {
             method: "POST",
             headers: {
@@ -5861,17 +5893,22 @@
             body: JSON.stringify({ tenantId: "nanban_main", student: student })
         });
     }
-    async function nanbanAfterAdmissionSave_(student) {
+    async function nanbanAfterAdmissionSave_(student, opts) {
         if (!nanbanNativeConfigured_() || !student) return;
+        opts = opts || {};
+        var isNew = opts.isNewAdmission === true;
+        var waViaSnapshot = opts.waViaSnapshot === true;
         try {
-            await nanbanPushSnapshot_();
+            if (!isNew) {
+                await apiCall_('updateStudentData', student);
+            }
         } catch (e) {
-            console.warn("nanbanPushSnapshot_", e);
+            console.warn("nanbanAfterAdmissionSave_ updateStudentData", e);
         }
         try {
-            await nanbanQueueWaJob_(student);
+            await nanbanPushSnapshot_(waViaSnapshot ? student : null);
         } catch (e) {
-            console.warn("nanbanQueueWaJob_", e);
+            console.warn("nanbanPushSnapshot_", e);
         }
     }
 
@@ -8028,8 +8065,27 @@
                         .withFailureHandler(function() { processSaving("", "", ""); })
                         .uploadFileToDrive(p.data, p.name);
                 });
+            } else if (nanbanNativeConfigured_()) {
+                processFileUpload(file, function(p) {
+                    if (!p) return;
+                    showLoader("Uploading document...");
+                    apiCall_("uploadFileToDrive", p.data, p.name)
+                        .then(function(r) {
+                            if (r && r.url) {
+                                processSaving(String(r.url), String(r.id || ""), p.type);
+                            } else {
+                                showToast("⚠️ Upload Failed", "danger");
+                                processSaving("", "", "");
+                            }
+                        })
+                        .catch(function(err) {
+                            console.warn("uploadFileToDrive", err);
+                            showToast("⚠️ Upload Failed", "danger");
+                            processSaving("", "", "");
+                        });
+                });
             } else {
-                showToast("⚠️ Native mode: LLR PDF → Firebase Storage/Drive link not wired here; saving without file.", "warning");
+                showToast("⚠️ LLR file upload requires Nanban cloud or Apps Script.", "warning");
                 processSaving("", "", "");
             }
         } else {
@@ -8082,7 +8138,7 @@
                         try { google.script.run.sendWelcomeMessageAction(existing.id); } catch(e) {}
                         finishUp("அட்மிஷன் அப்டேட் ஆனது!"); 
                         setTimeout(function() {
-                            if (nanbanNativeConfigured_()) { try { nanbanAfterAdmissionSave_(existing); } catch (e) {} }
+                            if (nanbanNativeConfigured_()) { try { nanbanAfterAdmissionSave_(existing, { isNewAdmission: false, waViaSnapshot: false }); } catch (e) {} }
                         }, 0);
                     }).updateStudentData(existing);
                 }
@@ -8108,7 +8164,7 @@
                                 studentsData.unshift(newStudent); 
                                 finishUp("அட்மிஷன் பதிவானது!"); 
                                 setTimeout(function() {
-                                    if (nanbanNativeConfigured_()) { try { nanbanAfterAdmissionSave_(newStudent); } catch (e) {} }
+                                    if (nanbanNativeConfigured_()) { try { nanbanAfterAdmissionSave_(newStudent, { isNewAdmission: true, waViaSnapshot: false }); } catch (e) {} }
                                 }, 0);
                             } else {
                                 hideLoader();
@@ -8155,7 +8211,12 @@
             }
 
             if (studentForNativeWa && nanbanNativeConfigured_()) {
-                try { nanbanAfterAdmissionSave_(studentForNativeWa); } catch (e) {}
+                try {
+                    nanbanAfterAdmissionSave_(studentForNativeWa, {
+                        isNewAdmission: !existing,
+                        waViaSnapshot: !!(fastUiMode && !existing)
+                    });
+                } catch (e) {}
             }
         }
         
@@ -8613,11 +8674,25 @@
                 </div>`;
             }
 
-            if (s.llrDocUrl || (s.llrStatus === 'Yes' && s.llrDate)) { 
-                var llrHref = resolveNanbanMediaUrl_(s.llrDocUrl || '');
-                var llrSafe = llrHref ? String(llrHref).replace(/"/g, '&quot;') : '';
-                llrBox.innerHTML = `<b style="color:var(--success);">ஆவணம் உள்ளது</b>` + (llrSafe ? ` <br><a href="${llrSafe}" target="_blank" rel="noopener" style="display:inline-block; margin-top:5px; background:var(--secondary); color:white; padding:5px 10px; border-radius:8px; text-decoration:none; font-size:12px; font-weight:bold;">📄 ஆவணத்தைப் பார்க்க (VIEW)</a>` : "") + llrStatusHtml; 
-            } else { 
+            var rawDoc = String(s.llrDocUrl || s.llrDocId || "").trim();
+            var openUrl = rawDoc ? resolveNanbanMediaUrl_(rawDoc) : "";
+            var hasHttp = openUrl && /^https?:\/\//i.test(String(openUrl).trim());
+
+            if (hasHttp) {
+                var enc = encodeURIComponent(String(openUrl).trim());
+                llrBox.innerHTML =
+                    '<div style="display:flex; flex-direction:column; gap:8px; margin-top:6px;">' +
+                    '<button type="button" style="padding:10px 14px; font-size:13px; font-weight:800; cursor:pointer; background:var(--success); color:#fff; border:2px solid #15803d; border-radius:10px;" ' +
+                    'onclick="event.preventDefault(); event.stopPropagation(); openNanbanLlrDocumentFromEncoded_(\'' + enc + '\'); return false;">ஆவணம் உள்ளது — திற</button>' +
+                    '<button type="button" style="padding:8px 12px; font-size:12px; font-weight:700; cursor:pointer; background:var(--secondary); color:#fff; border:none; border-radius:8px;" ' +
+                    'onclick="event.preventDefault(); event.stopPropagation(); openNanbanLlrDocumentFromEncoded_(\'' + enc + '\'); return false;">📄 VIEW / PDF</button>' +
+                    "</div>" +
+                    llrStatusHtml;
+            } else if (s.llrStatus === "Yes" && s.llrDate) {
+                llrBox.innerHTML =
+                    '<p style="margin:8px 0 0 0; font-size:12px; color:var(--warning); font-weight:700;">LLR தேதி உள்ளது; PDF இணைப்பு Firestore-ல் இல்லை. Edit மூலம் கோப்பை மீண்டும் ஏற்றி சேமிக்கவும்.</p>' +
+                    llrStatusHtml;
+            } else {
                 llrBox.innerHTML = `<div style="margin-top:5px;"><b style="color:var(--danger); font-size:12px;">பெண்டிங்</b><div style="margin-top:10px;"><input type="date" id="profNewLlrDate" style="padding:8px; font-size:12px; margin-bottom:5px; width:100%;"><input type="file" id="profNewLlrFile" accept=".pdf,.jpg,image/*" style="padding:8px; font-size:12px; background:white; width:100%;"></div></div>`; 
             } 
         }
@@ -8928,18 +9003,37 @@
         
         if (file && newLlrDate) { 
             processFileUpload(file, function(p) { 
-                if (!p) return; 
-                google.script.run
-                    .withSuccessHandler(function(res) { 
-                        if (res && res.url) { 
-                            s.llrDocUrl = res.url; 
-                            s.llrDocId = res.id; 
-                            s.llrStatus = 'Yes'; 
-                            s.llrDate = newLlrDate; 
-                        } 
-                        finishProfSave(s, amt, receiver); 
-                    })
-                    .uploadFileToDrive(p.data, p.name); 
+                if (!p) return;
+                function afterUpload(res) {
+                    if (res && res.url) {
+                        s.llrDocUrl = String(res.url);
+                        s.llrDocId = String(res.id || "");
+                        s.llrStatus = "Yes";
+                        s.llrDate = newLlrDate;
+                    } else if (nanbanNativeConfigured_()) {
+                        showToast("⚠️ LLR கோப்பு upload தோல்வி", "danger");
+                    }
+                    finishProfSave(s, amt, receiver);
+                }
+                if (nanbanNativeConfigured_()) {
+                    showLoader("Uploading LLR document...");
+                    apiCall_("uploadFileToDrive", p.data, p.name)
+                        .then(afterUpload)
+                        .catch(function(err) {
+                            console.warn("saveProfileEdit uploadFileToDrive", err);
+                            showToast("⚠️ LLR கோப்பு upload தோல்வி", "danger");
+                            finishProfSave(s, amt, receiver);
+                        });
+                    return;
+                }
+                if (isAppsScriptRuntime_()) {
+                    google.script.run
+                        .withSuccessHandler(afterUpload)
+                        .uploadFileToDrive(p.data, p.name);
+                    return;
+                }
+                showToast("⚠️ LLR upload இந்த சூழலில் கிடைக்கவில்லை", "warning");
+                finishProfSave(s, amt, receiver);
             }); 
         } else { 
             if (newLlrDate) { 
@@ -9046,17 +9140,36 @@
         
         if (file) { 
             processFileUpload(file, function(p) { 
-                if (!p) return; 
-                google.script.run
-                    .withSuccessHandler(function(res) { 
-                        if (res && res.url) { 
-                            s.llrDocUrl = res.url; 
-                            s.llrDocId = res.id; 
-                            s.llrStatus = 'Yes'; 
-                        } 
-                        finishEditSave(s); 
-                    })
-                    .uploadFileToDrive(p.data, p.name); 
+                if (!p) return;
+                function afterUpload(res) {
+                    if (res && res.url) {
+                        s.llrDocUrl = String(res.url);
+                        s.llrDocId = String(res.id || "");
+                        s.llrStatus = "Yes";
+                    } else if (nanbanNativeConfigured_()) {
+                        showToast("⚠️ LLR கோப்பு upload தோல்வி", "danger");
+                    }
+                    finishEditSave(s);
+                }
+                if (nanbanNativeConfigured_()) {
+                    showLoader("Uploading LLR document...");
+                    apiCall_("uploadFileToDrive", p.data, p.name)
+                        .then(afterUpload)
+                        .catch(function(err) {
+                            console.warn("saveEditedStudent uploadFileToDrive", err);
+                            showToast("⚠️ LLR கோப்பு upload தோல்வி", "danger");
+                            finishEditSave(s);
+                        });
+                    return;
+                }
+                if (isAppsScriptRuntime_()) {
+                    google.script.run
+                        .withSuccessHandler(afterUpload)
+                        .uploadFileToDrive(p.data, p.name);
+                    return;
+                }
+                showToast("⚠️ LLR upload இந்த சூழலில் கிடைக்கவில்லை", "warning");
+                finishEditSave(s);
             }); 
         } else { 
             finishEditSave(s); 
