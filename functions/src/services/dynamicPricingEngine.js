@@ -219,7 +219,7 @@ function deriveSelectionFromInbound(inbound) {
   if (/^QUIZ_/i.test(pid)) {
     return { action: "noop", serviceKeys: [] };
   }
-  if (/முதல் விடை|இரண்டாம் விடை|மூன்றாம் விடை/.test(text)) {
+  if (/முதல்|இரண்டாம்|மூன்றாம்/.test(text)) {
     return { action: "noop", serviceKeys: [] };
   }
 

@@ -89,9 +89,11 @@ async function processInboundBusinessActions(ctx) {
   const pid = String(inbound?.interactive?.id || "").trim();
   const clicked = pid || inbound?.interactive?.title || inbound?.text || "";
 
+  const btnTitle = String(inbound?.interactive?.title || "");
   const isQuizLike =
     /^QUIZ_/i.test(pid) ||
-    /முதல் விடை|இரண்டாம் விடை|மூன்றாம் விடை/.test(String(inbound?.interactive?.title || ""));
+    /முதல்|இரண்டாம்|மூன்றாம்|விடை/.test(btnTitle) ||
+    String(inbound?.type || "") === "button";
 
   if (clicked && !isQuizLike) {
     await queueAdminLeadAlert(tenantId, inbound?.from || "", clicked);

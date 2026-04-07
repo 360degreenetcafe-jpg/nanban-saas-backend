@@ -6,6 +6,8 @@ const { getISTDateString } = require("../lib/istTime");
 
 const TENANT_DEFAULT = "nanban_main";
 
+const QUIZ_EXPIRED_MSG = "மன்னிக்கவும், இந்த கேள்விக்கான நேரம் முடிந்துவிட்டது.";
+
 function digitsPhone(p) {
   let d = String(p || "").replace(/\D/g, "");
   if (d.length > 10) d = d.slice(-10);
@@ -25,20 +27,35 @@ function cleanQuizInboundText(msg) {
     .toLowerCase();
 }
 
+/**
+ * Tamil + digit matching for template button labels and free-text replies.
+ * Order: explicit Tamil phrases → standalone digits 1–3.
+ */
 function parseQuizChoiceFromText(msg) {
+  const raw = String(msg || "")
+    .replace(/[*_~`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!raw) return 0;
+
+  if (raw.includes("முதல்")) return 1;
+  if (raw.includes("இரண்டாம்")) return 2;
+  if (raw.includes("மூன்றாம்")) return 3;
+
+  const lower = raw.toLowerCase();
+  if (lower.includes("first") && !lower.includes("second") && !lower.includes("third")) return 1;
+  if (lower.includes("second")) return 2;
+  if (lower.includes("third")) return 3;
+
+  if (lower === "1" || lower === "1️⃣" || /^[1１]$/.test(raw.trim())) return 1;
+  if (lower === "2" || lower === "2️⃣" || /^[2２]$/.test(raw.trim())) return 2;
+  if (lower === "3" || lower === "3️⃣" || /^[3３]$/.test(raw.trim())) return 3;
+
   const t = cleanQuizInboundText(msg);
-  if (t === "1" || t === "1️⃣" || t.includes("முதல் விடை") || (t.includes("முதல்") && t.includes("விடை")))
-    return 1;
-  if (
-    t === "2" ||
-    t === "2️⃣" ||
-    t.includes("இரண்டாம் விடை") ||
-    t.includes("இரண்டாம்") ||
-    t.includes("இரண்டு")
-  )
-    return 2;
-  if (t === "3" || t === "3️⃣" || t.includes("மூன்றாம் விடை") || t.includes("மூன்றாம்") || t.includes("மூன்று"))
-    return 3;
+  if (t.includes("1") && !t.includes("2") && !t.includes("3")) return 1;
+  if (t.includes("2") && !t.includes("3")) return 2;
+  if (t.includes("3")) return 3;
+
   return 0;
 }
 
@@ -57,13 +74,18 @@ function parseQuizChoiceFromButton(id) {
   return 0;
 }
 
-/** Button replies have empty `text.body`; use interactive title + id. */
+/**
+ * `interactive` (button_reply) OR legacy `type: "button"` normalized to the same shape in waInboundWorker.
+ * Prefer visible `title` (Tamil label) then `id` (payload).
+ */
 function resolveQuizChoiceFromInbound(inbound) {
   if (inbound?.interactive?.kind === "button_reply") {
-    const idPick = parseQuizChoiceFromButton(inbound.interactive.id);
-    if (idPick) return idPick;
     const titlePick = parseQuizChoiceFromText(inbound.interactive.title || "");
     if (titlePick) return titlePick;
+    const idPick = parseQuizChoiceFromButton(inbound.interactive.id);
+    if (idPick) return idPick;
+    const idAsText = parseQuizChoiceFromText(inbound.interactive.id || "");
+    if (idAsText) return idAsText;
   }
   return parseQuizChoiceFromText(inbound?.text || "");
 }
@@ -94,14 +116,37 @@ async function tryHandleNanbanQuizInbound({ tenantId, inbound }) {
   const choice = resolveQuizChoiceFromInbound(inbound);
   if (!choice) return { handled: false };
 
+  const to = waE164FromInbound(fromWa);
+
+  const sendQuizExpiredReply = async (reason) => {
+    if (to) {
+      await enqueueWaOutboundSend(
+        {
+          tenantId: tid,
+          to,
+          message: QUIZ_EXPIRED_MSG,
+          messageType: "text",
+          metadata: { kind: "quiz_reply_expired", reason: String(reason || ""), choice }
+        },
+        { delaySeconds: 0 }
+      );
+    }
+    info("NANBAN_QUIZ_INBOUND_NO_PENDING", { phone10, choice, reason: String(reason || "") });
+    return { handled: true, expired: true };
+  };
+
   const snap = await getBusinessSnapshotDoc("Nanban");
   let students = Array.isArray(snap.students) ? snap.students.map((x) => ({ ...x })) : [];
   const ix = students.findIndex((s) => digitsPhone(s.phone) === phone10);
-  if (ix < 0) return { handled: false };
+  if (ix < 0) {
+    return sendQuizExpiredReply("student_not_found");
+  }
 
   const s = { ...students[ix] };
   const q = Array.isArray(s.quizPendingQueue) ? [...s.quizPendingQueue] : [];
-  if (!q.length) return { handled: false };
+  if (!q.length) {
+    return sendQuizExpiredReply("quiz_pending_queue_empty");
+  }
 
   const pending = q[0];
   const correctNo = parseInt(pending.correctNo, 10) || 1;
@@ -134,7 +179,6 @@ async function tryHandleNanbanQuizInbound({ tenantId, inbound }) {
   students[ix] = s;
   await persistNanbanStudents(students);
 
-  const to = waE164FromInbound(fromWa);
   if (to) {
     const okMsg = "சரியான விடை! உங்கள் வாலட்டில் ₹1 வரவு வைக்கப்பட்டது.";
     const badMsg =

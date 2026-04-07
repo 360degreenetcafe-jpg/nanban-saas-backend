@@ -16,6 +16,21 @@ function extractInboundMessagesCount(payload) {
   return count;
 }
 
+function logWebhookInboundMessages(payload) {
+  try {
+    for (const entry of payload.entry || []) {
+      for (const change of entry.changes || []) {
+        const messages = Array.isArray(change?.value?.messages) ? change.value.messages : [];
+        for (const message of messages) {
+          console.log("WEBHOOK_INBOUND_MSG:", JSON.stringify(message));
+        }
+      }
+    }
+  } catch (e) {
+    console.log("WEBHOOK_INBOUND_MSG_LOG_ERROR:", String(e && e.message ? e.message : e));
+  }
+}
+
 function createWebhookApp({ getVerifyToken, getAppSecret }) {
   const app = express();
   app.disable("x-powered-by");
@@ -72,6 +87,8 @@ function createWebhookApp({ getVerifyToken, getAppSecret }) {
 
     // Ack fast to Meta; heavy operations should be async.
     res.status(200).send("EVENT_RECEIVED");
+
+    logWebhookInboundMessages(payload);
 
     try {
       const inboundCount = extractInboundMessagesCount(payload);

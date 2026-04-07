@@ -58,6 +58,14 @@ function extractInboundMessages(webhookPayload) {
               title: msg?.interactive?.list_reply?.title || ""
             };
           }
+        } else if (msg?.type === "button") {
+          /** Meta template / legacy quick reply: `button` not nested under `interactive`. */
+          const btn = msg?.button || {};
+          normalized.interactive = {
+            kind: "button_reply",
+            id: String(btn.payload != null ? btn.payload : "").trim(),
+            title: String(btn.text != null ? btn.text : "").trim()
+          };
         }
         output.push(normalized);
       }

@@ -1,44 +1,62 @@
 const { z } = require("zod");
 
-const TextMessageSchema = z.object({
-  from: z.string().min(6),
-  id: z.string().min(5),
-  timestamp: z.string().min(1),
-  type: z.literal("text"),
-  text: z.object({
-    body: z.string().min(1).max(4096)
+const TextMessageSchema = z
+  .object({
+    from: z.string().min(6),
+    id: z.string().min(5),
+    timestamp: z.string().min(1),
+    type: z.literal("text"),
+    text: z.object({
+      body: z.string().min(1).max(4096)
+    })
   })
-}).strict();
+  .passthrough();
 
 const ButtonMessageSchema = z.object({
   from: z.string().min(6),
   id: z.string().min(5),
   timestamp: z.string().min(1),
   type: z.literal("button"),
-  button: z.object({
-    text: z.string().min(1).max(256).optional(),
-    payload: z.string().min(1).max(256).optional()
-  }).strict()
-}).strict();
+  /** Template quick-reply: often `text` = visible label, `payload` = developer-defined (may be empty). */
+  button: z
+    .object({
+      text: z.string().max(512).optional(),
+      payload: z.string().max(1024).optional()
+    })
+    .passthrough()
+    .refine((b) => String(b?.text || "").trim().length > 0 || String(b?.payload || "").trim().length > 0, {
+      message: "button.text or button.payload required"
+    })
+}).passthrough();
 
-const InteractiveMessageSchema = z.object({
-  from: z.string().min(6),
-  id: z.string().min(5),
-  timestamp: z.string().min(1),
-  type: z.literal("interactive"),
-  interactive: z.object({
-    type: z.enum(["button_reply", "list_reply"]),
-    button_reply: z.object({
-      id: z.string().min(1).max(256),
-      title: z.string().min(1).max(256)
-    }).strict().optional(),
-    list_reply: z.object({
-      id: z.string().min(1).max(256),
-      title: z.string().min(1).max(256),
-      description: z.string().max(256).optional()
-    }).strict().optional()
-  }).strict()
-}).strict();
+const InteractiveMessageSchema = z
+  .object({
+    from: z.string().min(6),
+    id: z.string().min(5),
+    timestamp: z.string().min(1),
+    type: z.literal("interactive"),
+    interactive: z
+      .object({
+        type: z.enum(["button_reply", "list_reply"]),
+        button_reply: z
+          .object({
+            id: z.string().min(1).max(256),
+            title: z.string().min(1).max(256)
+          })
+          .passthrough()
+          .optional(),
+        list_reply: z
+          .object({
+            id: z.string().min(1).max(256),
+            title: z.string().min(1).max(256),
+            description: z.string().max(256).optional()
+          })
+          .passthrough()
+          .optional()
+      })
+      .passthrough()
+  })
+  .passthrough();
 
 const MessageSchema = z.union([
   TextMessageSchema,
