@@ -1,6 +1,6 @@
 const admin = require("firebase-admin");
 const { info } = require("../lib/logger");
-const { runDynamicPricingFromInbound } = require("./dynamicPricingEngine");
+const { runDynamicPricingFromInbound, isGreetingInbound } = require("./dynamicPricingEngine");
 const { enqueueWaOutboundSend } = require("./waOutboundQueue");
 const { resolveChatbotOutboundTemplate } = require("./waTemplateConfig");
 const { tryHandleNanbanQuizInbound } = require("./nanbanQuizInbound");
@@ -95,7 +95,10 @@ async function processInboundBusinessActions(ctx) {
     /முதல்|இரண்டாம்|மூன்றாம்|விடை/.test(btnTitle) ||
     String(inbound?.type || "") === "button";
 
-  if (clicked && !isQuizLike) {
+  const inboundText = String(inbound?.text || "").trim();
+  const isGreeting = isGreetingInbound(pid, inboundText);
+
+  if (clicked && !isQuizLike && !isGreeting) {
     await queueAdminLeadAlert(tenantId, inbound?.from || "", clicked);
   }
 

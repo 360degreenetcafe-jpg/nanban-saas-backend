@@ -296,5 +296,6 @@ module.exports = {
   buildDynamicPricingMessage,
   buildEnquiryWelcomTwoParams,
   buildEnquiryStyleTemplateParams,
-  runDynamicPricingFromInbound
+  runDynamicPricingFromInbound,
+  isGreetingInbound
 };
