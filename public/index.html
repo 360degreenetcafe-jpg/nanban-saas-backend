@@ -2920,9 +2920,23 @@
         </div>
 
         <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
-            <div class="finance-item">
+            <div class="finance-item" style="grid-column: 1 / -1;">
                 <label>💵 ரொக்கம் (Cash)</label>
                 <input type="number" id="esOpCash" value="0" style="text-align:center; font-weight:800; font-size:18px;">
+                <details id="esDenomDetails" style="margin-top:10px;">
+                    <summary style="cursor:pointer; font-size:11px; font-weight:800; color:var(--es-primary); user-select:none;">₹ டினாமினேஷன் கணக்கீடு (note counts → total)</summary>
+                    <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:6px; margin-top:8px; font-size:11px;">
+                        <label style="display:flex;align-items:center;gap:4px;white-space:nowrap;">₹500×<input type="number" min="0" class="es-denom-inp" data-note="500" style="width:100%;padding:4px;text-align:center;" oninput="syncESOpeningCashFromDenom_()"></label>
+                        <label style="display:flex;align-items:center;gap:4px;white-space:nowrap;">₹200×<input type="number" min="0" class="es-denom-inp" data-note="200" style="width:100%;padding:4px;text-align:center;" oninput="syncESOpeningCashFromDenom_()"></label>
+                        <label style="display:flex;align-items:center;gap:4px;white-space:nowrap;">₹100×<input type="number" min="0" class="es-denom-inp" data-note="100" style="width:100%;padding:4px;text-align:center;" oninput="syncESOpeningCashFromDenom_()"></label>
+                        <label style="display:flex;align-items:center;gap:4px;white-space:nowrap;">₹50×<input type="number" min="0" class="es-denom-inp" data-note="50" style="width:100%;padding:4px;text-align:center;" oninput="syncESOpeningCashFromDenom_()"></label>
+                        <label style="display:flex;align-items:center;gap:4px;white-space:nowrap;">₹20×<input type="number" min="0" class="es-denom-inp" data-note="20" style="width:100%;padding:4px;text-align:center;" oninput="syncESOpeningCashFromDenom_()"></label>
+                        <label style="display:flex;align-items:center;gap:4px;white-space:nowrap;">₹10×<input type="number" min="0" class="es-denom-inp" data-note="10" style="width:100%;padding:4px;text-align:center;" oninput="syncESOpeningCashFromDenom_()"></label>
+                        <label style="display:flex;align-items:center;gap:4px;white-space:nowrap;">₹5×<input type="number" min="0" class="es-denom-inp" data-note="5" style="width:100%;padding:4px;text-align:center;" oninput="syncESOpeningCashFromDenom_()"></label>
+                        <label style="display:flex;align-items:center;gap:4px;white-space:nowrap;">₹2×<input type="number" min="0" class="es-denom-inp" data-note="2" style="width:100%;padding:4px;text-align:center;" oninput="syncESOpeningCashFromDenom_()"></label>
+                        <label style="display:flex;align-items:center;gap:4px;white-space:nowrap;">₹1×<input type="number" min="0" class="es-denom-inp" data-note="1" style="width:100%;padding:4px;text-align:center;" oninput="syncESOpeningCashFromDenom_()"></label>
+                    </div>
+                </details>
             </div>
             <div class="finance-item">
                 <label>🏦 SBI Bank</label>
@@ -5841,10 +5855,25 @@
         return snap.exists ? (snap.data() || {}) : null;
     }
 
+    function stripUndefinedForClientFirestore_(val) {
+        if (val === undefined) return undefined;
+        if (val === null || typeof val !== 'object') return val;
+        if (Array.isArray(val)) {
+            return val.map(function(x) { return stripUndefinedForClientFirestore_(x); }).filter(function(x) { return x !== undefined; });
+        }
+        var out = {};
+        Object.keys(val).forEach(function(k) {
+            var v = stripUndefinedForClientFirestore_(val[k]);
+            if (v !== undefined) out[k] = v;
+        });
+        return out;
+    }
+
     async function fbSetSnapshotDoc(businessName, payload) {
         if (!firebaseReady || !firebaseDb) return;
         let ref = firebaseDb.collection('businesses').doc(businessName).collection('snapshot').doc('main');
-        await ref.set(payload, { merge: true });
+        var clean = stripUndefinedForClientFirestore_(payload) || {};
+        await ref.set(clean, { merge: true });
     }
 
     function userCanAccessBusiness(mode) {
@@ -6604,6 +6633,7 @@
 
                     let hasTodayOpening = !!(esevaiData.openingBalance && isTodayLike(esevaiData.openingBalance.date));
                     if (allowOpeningModal && !hasTodayOpening && !silent) {
+                        resetESOpeningDenomFields_();
                         showModal('esOpeningModal');
                     } else if (activateDash) {
                         switchTab('esDash');
@@ -6763,6 +6793,10 @@
             });
         });
 
+        delete out.students;
+        delete out.expenses;
+        delete out.chitData;
+
         return out;
     }
 
@@ -6861,7 +6895,10 @@
                     }, 20);
                 }
                 let hasTodayOpening = !!(esevaiData.openingBalance && isTodayLike(esevaiData.openingBalance.date));
-                if (!hasTodayOpening) showModal('esOpeningModal');
+                if (!hasTodayOpening) {
+                    resetESOpeningDenomFields_();
+                    showModal('esOpeningModal');
+                }
             } else {
                 loadESevaiInitialData({ silent: false, activateDash: true, allowOpeningModal: true });
             }
@@ -14319,6 +14356,21 @@
             .saveESevaiSettingsAction(obj);
     }
 
+    function syncESOpeningCashFromDenom_() {
+        var total = 0;
+        document.querySelectorAll('#esOpeningModal .es-denom-inp').forEach(function(el) {
+            var n = parseInt(el.getAttribute('data-note'), 10) || 0;
+            var c = parseInt(el.value, 10) || 0;
+            total += n * c;
+        });
+        var cashEl = document.getElementById('esOpCash');
+        if (cashEl) cashEl.value = String(total);
+    }
+
+    function resetESOpeningDenomFields_() {
+        document.querySelectorAll('#esOpeningModal .es-denom-inp').forEach(function(el) { el.value = ''; });
+    }
+
     function saveESOpeningBalance() {
         let b = {
             Cash: parseInt(getVal('esOpCash')) || 0,
@@ -14349,6 +14401,7 @@
                     await persistESevaiData();
                     hideLoader();
                     showToast("✅ கணக்கு தொடங்கப்பட்டது!", "success");
+                    resetESOpeningDenomFields_();
                     closeModal('esOpeningModal');
                     loadESevaiInitialData();
                 } catch (e) {

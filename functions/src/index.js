@@ -23,6 +23,11 @@ const {
 if (!admin.apps.length) {
   admin.initializeApp();
 }
+try {
+  admin.firestore().settings({ ignoreUndefinedProperties: true });
+} catch (e) {
+  /* settings() throws if Firestore was already started; safe to ignore */
+}
 
 const WHATSAPP_VERIFY_TOKEN = defineSecret("WHATSAPP_VERIFY_TOKEN");
 const WHATSAPP_APP_SECRET = defineSecret("WHATSAPP_APP_SECRET");

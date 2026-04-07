@@ -138,6 +138,11 @@ function normalizeSnapshotDocForRead(businessName, raw) {
     ]) {
       data[k] = coerceFirestoreArray(data[k]);
     }
+    delete data.students;
+    delete data.Students;
+    delete data.expenses;
+    delete data.Expenses;
+    delete data.chitData;
     return data;
   }
   const rawStu = pickBestStudentsRaw_(data);
@@ -165,8 +170,9 @@ function mergeParentAndSubSnapshot_(parentRaw, subRaw) {
     const b = s[key];
     return coerceFirestoreArray(b).length > coerceFirestoreArray(a).length ? b : a;
   };
-  out.students = pickLonger("students");
-  out.expenses = pickLonger("expenses");
+  // Never leave undefined — ESevai early-return path would pass it through to Firestore writes.
+  out.students = coerceFirestoreArray(pickLonger("students"));
+  out.expenses = coerceFirestoreArray(pickLonger("expenses"));
   return out;
 }
 
@@ -193,13 +199,35 @@ async function getBusinessSnapshotDoc(businessName) {
   return out;
 }
 
+function stripUndefinedDeepForFirestore_(val) {
+  if (val === undefined) return undefined;
+  if (val === null || typeof val !== "object") return val;
+  const ctor = val.constructor && val.constructor.name;
+  if (ctor === "Timestamp" || ctor === "GeoPoint" || ctor === "DocumentReference" || ctor === "VectorValue") {
+    return val;
+  }
+  if (typeof ctor === "string" && ctor.endsWith("Transform")) return val;
+  if (Array.isArray(val)) {
+    return val.map((x) => stripUndefinedDeepForFirestore_(x)).filter((x) => x !== undefined);
+  }
+  const out = {};
+  for (const k of Object.keys(val)) {
+    const v = stripUndefinedDeepForFirestore_(val[k]);
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
+}
+
 async function setBusinessSnapshotDoc(businessName, data, merge = true) {
   const name = String(businessName || "Nanban").trim() || "Nanban";
   const db = admin.firestore();
   const ref = db.collection("businesses").doc(name).collection("snapshot").doc("main");
-  const payload = Object.assign({}, data, {
-    updated_at: admin.firestore.FieldValue.serverTimestamp()
-  });
+  const base = data && typeof data === "object" ? data : {};
+  const payload = stripUndefinedDeepForFirestore_(
+    Object.assign({}, base, {
+      updated_at: admin.firestore.FieldValue.serverTimestamp()
+    })
+  );
   await ref.set(payload, { merge });
 }
 
@@ -215,10 +243,12 @@ async function setRuntimeDoc(businessName, docId, data, merge = true) {
   const name = String(businessName || "Nanban").trim() || "Nanban";
   const db = admin.firestore();
   const ref = db.collection("businesses").doc(name).collection("runtime").doc(String(docId || "main"));
-  await ref.set(
-    Object.assign({}, data, { updated_at: admin.firestore.FieldValue.serverTimestamp() }),
-    { merge }
+  const payload = stripUndefinedDeepForFirestore_(
+    Object.assign({}, data && typeof data === "object" ? data : {}, {
+      updated_at: admin.firestore.FieldValue.serverTimestamp()
+    })
   );
+  await ref.set(payload, { merge });
 }
 
 /** Firestore forbids nested arrays; rows may be stored as JSON strings per line. */

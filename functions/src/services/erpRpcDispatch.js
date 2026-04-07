@@ -118,6 +118,11 @@ function parseProcessDayCloseArgs(rawArgs) {
 async function loadEsevaiModel(tenantId) {
   const raw = await getBusinessSnapshotDoc("ESevai");
   const data = raw && typeof raw === "object" ? { ...raw } : {};
+  delete data.students;
+  delete data.Students;
+  delete data.expenses;
+  delete data.Expenses;
+  delete data.chitData;
   if (!data.balances) {
     data.balances = { Cash: 0, SBI: 0, "Federal 1": 0, "Federal 2": 0, Paytm: 0 };
   }
