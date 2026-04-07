@@ -1,98 +1,44 @@
 const { z } = require("zod");
 
-const TextMessageSchema = z
-  .object({
-    from: z.string().min(6),
-    id: z.string().min(5),
-    timestamp: z.string().min(1),
-    type: z.literal("text"),
-    text: z.object({
-      body: z.string().min(1).max(4096)
-    })
-  })
-  .passthrough();
-
-const ButtonMessageSchema = z.object({
-  from: z.string().min(6),
-  id: z.string().min(5),
-  timestamp: z.string().min(1),
-  type: z.literal("button"),
-  /** Template quick-reply: often `text` = visible label, `payload` = developer-defined (may be empty). */
-  button: z
-    .object({
-      text: z.string().max(512).optional(),
-      payload: z.string().max(1024).optional()
-    })
-    .passthrough()
-    .refine((b) => String(b?.text || "").trim().length > 0 || String(b?.payload || "").trim().length > 0, {
-      message: "button.text or button.payload required"
-    })
-}).passthrough();
-
-const InteractiveMessageSchema = z
-  .object({
-    from: z.string().min(6),
-    id: z.string().min(5),
-    timestamp: z.string().min(1),
-    type: z.literal("interactive"),
-    interactive: z
-      .object({
-        type: z.enum(["button_reply", "list_reply"]),
-        button_reply: z
-          .object({
-            id: z.string().min(1).max(256),
-            title: z.string().min(1).max(256)
-          })
-          .passthrough()
-          .optional(),
-        list_reply: z
-          .object({
-            id: z.string().min(1).max(256),
-            title: z.string().min(1).max(256),
-            description: z.string().max(256).optional()
-          })
-          .passthrough()
-          .optional()
-      })
-      .passthrough()
-  })
-  .passthrough();
-
-const MessageSchema = z.union([
-  TextMessageSchema,
-  ButtonMessageSchema,
-  InteractiveMessageSchema
-]);
-
-const WebhookChangeSchema = z.object({
-  field: z.string().min(1),
-  value: z.object({
-    messaging_product: z.literal("whatsapp").optional(),
-    metadata: z.object({
-      phone_number_id: z.string().optional(),
-      display_phone_number: z.string().optional()
-    }).partial().optional(),
-    contacts: z.array(z.any()).optional(),
-    messages: z.array(MessageSchema).optional(),
-    statuses: z.array(z.any()).optional()
-  }).passthrough()
-}).strict();
-
-const WebhookEntrySchema = z.object({
-  id: z.string().min(1).optional(),
-  changes: z.array(WebhookChangeSchema).min(1)
-}).strict();
-
-const WhatsAppWebhookBodySchema = z.object({
-  object: z.literal("whatsapp_business_account"),
-  entry: z.array(WebhookEntrySchema).min(1)
-}).strict();
-
+/**
+ * Meta webhook payloads vary (new message types, extra keys, timestamp as string OR number).
+ * Strict Zod unions caused HTTP 422 and dropped ALL inbound traffic. We only sanity-check
+ * shape; raw messages pass through untouched for waInboundWorker to normalize.
+ */
 function parseWebhookBody(input) {
-  return WhatsAppWebhookBodySchema.parse(input);
+  if (input == null || typeof input !== "object") {
+    throw new Error("webhook_body_not_object");
+  }
+  const body = input;
+  if (body.object !== "whatsapp_business_account") {
+    throw new Error("webhook_unexpected_object_field");
+  }
+  if (!Array.isArray(body.entry) || body.entry.length < 1) {
+    throw new Error("webhook_entry_missing_or_empty");
+  }
+  return body;
 }
+
+/**
+ * Never block publishing: coerce minimal shape so the worker can still run.
+ */
+function coerceWebhookBodyForPublish(parsedJson) {
+  const base =
+    parsedJson && typeof parsedJson === "object" && !Array.isArray(parsedJson) ? { ...parsedJson } : {};
+  if (base.object !== "whatsapp_business_account") {
+    base.object = "whatsapp_business_account";
+  }
+  if (!Array.isArray(base.entry)) {
+    base.entry = [];
+  }
+  return base;
+}
+
+/** Legacy tests / tooling: accept any object. */
+const WhatsAppWebhookBodySchema = z.record(z.unknown());
 
 module.exports = {
   WhatsAppWebhookBodySchema,
-  parseWebhookBody
+  parseWebhookBody,
+  coerceWebhookBodyForPublish
 };

@@ -1,6 +1,6 @@
 const express = require("express");
 const { ZodError } = require("zod");
-const { parseWebhookBody } = require("../schemas/whatsappWebhook.schema");
+const { parseWebhookBody, coerceWebhookBodyForPublish } = require("../schemas/whatsappWebhook.schema");
 const { verifyMetaSignature } = require("../lib/verifyMetaSignature");
 const { publishInboundWebhookEvent } = require("../services/publishInboundEvent");
 const { info, warn, error } = require("../lib/logger");
@@ -31,6 +31,10 @@ function logWebhookInboundMessages(payload) {
   }
 }
 
+/**
+ * Mounted on Cloud Function `whatsappWebhook` (region asia-south1).
+ * Meta callback URL path: https://<function-host>/wa/webhook
+ */
 function createWebhookApp({ getVerifyToken, getAppSecret }) {
   const app = express();
   app.disable("x-powered-by");
@@ -80,9 +84,12 @@ function createWebhookApp({ getVerifyToken, getAppSecret }) {
             message: i.message
           }))
         });
-        return res.status(422).json({ error: "Payload validation failed" });
+      } else {
+        warn("Webhook payload sanity check failed — using relaxed coerce (still ack Meta)", {
+          reason: String(validationErr && validationErr.message ? validationErr.message : validationErr)
+        });
       }
-      throw validationErr;
+      payload = coerceWebhookBodyForPublish(parsedJson);
     }
 
     // Ack fast to Meta; heavy operations should be async.

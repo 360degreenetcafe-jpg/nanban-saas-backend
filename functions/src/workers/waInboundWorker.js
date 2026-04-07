@@ -4,15 +4,14 @@ const { claimWamidForProcessing } = require("../services/idempotencyStore");
 const { processInboundBusinessActions } = require("../services/workerActions");
 const { info, warn, error } = require("../lib/logger");
 
-const PubSubEnvelopeSchema = z.object({
-  source: z.string().optional(),
-  receivedAt: z.string().optional(),
-  payload: z.object({
-    object: z.literal("whatsapp_business_account"),
-    entry: z.array(z.any()).min(1)
-  }),
-  messageCount: z.number().optional()
-});
+const PubSubEnvelopeSchema = z
+  .object({
+    source: z.string().optional(),
+    receivedAt: z.string().optional(),
+    payload: z.unknown(),
+    messageCount: z.number().optional()
+  })
+  .passthrough();
 
 function parsePubSubJson(event) {
   const b64 = event?.data?.message?.data;
@@ -33,12 +32,21 @@ function extractInboundMessages(webhookPayload) {
           : "";
       const messages = Array.isArray(value.messages) ? value.messages : [];
       for (const msg of messages) {
+        const mid = msg?.id != null && String(msg.id).trim() !== "" ? String(msg.id).trim() : "";
+        const wamid =
+          mid ||
+          `synthetic_${String(msg?.from || "unknown")}_${String(msg?.timestamp != null ? msg.timestamp : Date.now())}`;
         const normalized = {
-          wamid: msg?.id || null,
-          from: msg?.from || null,
-          timestamp: msg?.timestamp || null,
-          type: msg?.type || null,
-          text: msg?.text?.body || "",
+          wamid,
+          from: msg?.from != null ? String(msg.from) : null,
+          timestamp: msg?.timestamp != null ? String(msg.timestamp) : null,
+          type: msg?.type != null ? String(msg.type) : null,
+          text:
+            msg?.text?.body != null
+              ? String(msg.text.body)
+              : typeof msg?.text === "string"
+                ? msg.text
+                : "",
           interactive: null,
           phoneNumberId,
           profileName: waProfileName,
@@ -88,7 +96,16 @@ function createWaInboundWorker() {
       return;
     }
 
-    const inboundMessages = extractInboundMessages(envelope.payload);
+    const rawPayload = envelope.payload;
+    const webhookPayload =
+      rawPayload && typeof rawPayload === "object" && !Array.isArray(rawPayload)
+        ? rawPayload
+        : { object: "whatsapp_business_account", entry: [] };
+    if (!Array.isArray(webhookPayload.entry)) {
+      webhookPayload.entry = [];
+    }
+
+    const inboundMessages = extractInboundMessages(webhookPayload);
     if (!inboundMessages.length) {
       info("WA_WORKER_NO_INBOUND_MESSAGES", {});
       return;
@@ -96,11 +113,6 @@ function createWaInboundWorker() {
 
     for (const inbound of inboundMessages) {
       try {
-        if (!inbound.wamid) {
-          warn("WA_WORKER_SKIP_NO_WAMID", { from: inbound.from });
-          continue;
-        }
-
         const tenantContext = await resolveTenantFromPhoneNumberId(inbound.phoneNumberId);
         const tenantId = tenantContext.tenantId;
 
@@ -141,7 +153,7 @@ function createWaInboundWorker() {
           reason: String(msgErr),
           wamid: inbound?.wamid || ""
         });
-        throw msgErr;
+        // Ack Pub/Sub — do not rethrow (infinite retries would stall all inbound).
       }
     }
   };
