@@ -244,19 +244,18 @@ async function handleErpRpc(action, rawArgs) {
 
       case "updateStudentData": {
         const s = args[0];
-        if (!s || !s.id) return { status: "error", message: "Invalid student" };
-        s.phone = normPhone10(s.phone);
+        if (!s || s.id == null) return { status: "error", message: "Invalid student" };
         const snap = await getBusinessSnapshotDoc("Nanban");
         let students = Array.isArray(snap.students) ? [...snap.students] : [];
-        let found = false;
-        students = students.map((x) => {
-          if (String(x.id) === String(s.id)) {
-            found = true;
-            return s;
-          }
-          return x;
+        const ix = students.findIndex((x) => String(x.id) === String(s.id));
+        if (ix < 0) return { status: "error", message: "Not found" };
+        const prev = students[ix];
+        const patch = typeof s === "object" && s ? { ...s } : {};
+        const phoneNorm = normPhone10(patch.phone != null ? patch.phone : prev.phone);
+        students[ix] = Object.assign({}, prev, patch, {
+          id: prev.id,
+          phone: phoneNorm || prev.phone
         });
-        if (!found) return { status: "error", message: "Not found" };
         await saveNanbanPartial({ students });
         return { status: "success" };
       }
@@ -278,24 +277,110 @@ async function handleErpRpc(action, rawArgs) {
       }
 
       case "getTrainerKmSessionAction": {
+        const today = getISTDateString();
         const meta = await getRuntimeDoc("Nanban", "trainer_km_session");
-        return { status: "success", data: meta.session || null };
+        const sess = meta.session && typeof meta.session === "object" ? meta.session : null;
+        const empty = {
+          status: "success",
+          active: false,
+          date: today,
+          startKm: 0,
+          startedBy: "",
+          endKm: 0
+        };
+        if (!sess) return empty;
+        const startKm =
+          parseInt(sess.start_km, 10) || parseInt(sess.startKm, 10) || parseInt(sess.start, 10) || 0;
+        let sessDate = String(sess.date_ist || "");
+        if (!sessDate && sess.started_at) {
+          try {
+            sessDate = getISTDateString(new Date(sess.started_at));
+          } catch (e) {
+            sessDate = "";
+          }
+        }
+        const active =
+          sess.active !== false &&
+          startKm > 0 &&
+          String(sessDate || "") === String(today) &&
+          sess.cleared !== true;
+        if (!active) return empty;
+        const endKm = parseInt(sess.end_km, 10) || parseInt(sess.endKm, 10) || 0;
+        return {
+          status: "success",
+          active: true,
+          date: sessDate || today,
+          startKm,
+          startedBy: String(sess.trainer || sess.startedBy || sess.started_by || ""),
+          endKm
+        };
       }
 
       case "startTrainerKmSessionAction": {
-        const st = args[0];
-        const trainerName = args[1] || "Trainer";
+        const today = getISTDateString();
+        const st = parseInt(args[0], 10) || 0;
+        const trainerName = String(args[1] || "Trainer");
+        if (st <= 0) return { status: "error", message: "Invalid Start KM" };
+        const meta = await getRuntimeDoc("Nanban", "trainer_km_session");
+        const prev = meta.session && typeof meta.session === "object" ? meta.session : null;
+        const prevStart =
+          parseInt(prev?.start_km, 10) || parseInt(prev?.startKm, 10) || parseInt(prev?.start, 10) || 0;
+        const prevDate = String(prev?.date_ist || "");
+        let prevActive = prev && prev.active !== false && prevStart > 0;
+        if (prev && !prevDate && prev.started_at) {
+          try {
+            const d = getISTDateString(new Date(prev.started_at));
+            prevActive = prevActive && d === today;
+          } catch (e) {
+            prevActive = false;
+          }
+        } else if (prevDate) {
+          prevActive = prevActive && prevDate === today;
+        } else if (prev && prevStart > 0) {
+          prevActive = false;
+        }
+        if (prevActive && prevStart > 0) {
+          return {
+            status: "exists",
+            date: today,
+            active: true,
+            startKm: prevStart,
+            startedBy: String(prev.trainer || prev.startedBy || prev.started_by || trainerName),
+            endKm: parseInt(prev.end_km, 10) || parseInt(prev.endKm, 10) || 0
+          };
+        }
         const session = {
+          active: true,
+          date_ist: today,
           start_km: st,
           trainer: trainerName,
-          started_at: new Date().toISOString()
+          started_at: new Date().toISOString(),
+          end_km: 0,
+          cleared: false
         };
         await setRuntimeDoc("Nanban", "trainer_km_session", { session });
-        return { status: "success" };
+        return {
+          status: "success",
+          date: today,
+          active: true,
+          startKm: st,
+          startedBy: trainerName,
+          endKm: 0
+        };
       }
 
       case "clearTrainerKmSessionAction": {
-        await setRuntimeDoc("Nanban", "trainer_km_session", { session: null });
+        await setRuntimeDoc("Nanban", "trainer_km_session", {
+          session: {
+            active: false,
+            cleared: true,
+            date_ist: getISTDateString(),
+            start_km: 0,
+            end_km: 0,
+            trainer: "",
+            started_at: ""
+          }
+        });
         return { status: "success" };
       }
 

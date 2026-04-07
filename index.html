@@ -9606,23 +9606,32 @@
     function markTrainerAbsent() { 
         if (!confirm("கஸ்டமர் வரவில்லை (Absent) என்று பதிவு செய்து மெசேஜ் அனுப்பலாமா?")) return; 
         showLoader("Marking Absent..."); 
-        
-        google.script.run
-            .withSuccessHandler(function(res) { 
-                hideLoader(); 
-                if (res && res.status === 'success') {
-                    showToast("✅ பதிவு செய்யப்பட்டது!"); 
-                    closeModal('trainerActionModal'); 
-                    loadDatabase(); 
-                } else {
-                    showToast("பிழை: " + (res.message || "Unknown error"), "danger");
-                }
-            })
-            .withFailureHandler(function(err) {
-                hideLoader();
-                showToast("Server Error: " + err.toString(), "danger");
-            })
-            .processTrainerEntry(trainerActionStudentId, 'absent', 0, '', 0, currentUserName); 
+
+        function onTrainerRpcDone(res) {
+            hideLoader();
+            if (res && res.status === 'success') {
+                showToast("✅ பதிவு செய்யப்பட்டது!");
+                closeModal('trainerActionModal');
+                loadDatabase();
+            } else {
+                showToast("பிழை: " + ((res && res.message) || "Unknown error"), "danger");
+            }
+        }
+        function onTrainerRpcErr(err) {
+            hideLoader();
+            showToast("Server Error: " + (err && err.message ? err.message : String(err)), "danger");
+        }
+
+        if (nanbanNativeConfigured_() || isBridgeConfigured_()) {
+            apiCall_('processTrainerEntry', trainerActionStudentId, 'absent', 0, '', 0, currentUserName)
+                .then(onTrainerRpcDone)
+                .catch(onTrainerRpcErr);
+        } else {
+            google.script.run
+                .withSuccessHandler(onTrainerRpcDone)
+                .withFailureHandler(onTrainerRpcErr)
+                .processTrainerEntry(trainerActionStudentId, 'absent', 0, '', 0, currentUserName);
+        }
     }
 
     function saveTrainerAction() { 
@@ -9635,23 +9644,32 @@
             return showToast("பணம் உள்ளிடவும்!", "danger"); 
         } 
         showLoader("Saving..."); 
-        
-        google.script.run
-            .withSuccessHandler(function(res) { 
-                hideLoader(); 
-                if (res && res.status === 'success') {
-                    showToast("✅ பதிவு செய்யப்பட்டது!"); 
-                    closeModal('trainerActionModal'); 
-                    loadDatabase(); 
-                } else {
-                    showToast("பிழை: " + (res.message || "Unknown error"), "danger");
-                }
-            })
-            .withFailureHandler(function(err) {
-                hideLoader();
-                showToast("Server Error: " + err.toString(), "danger");
-            })
-            .processTrainerEntry(trainerActionStudentId, type, attCount, perf, amt, currentUserName); 
+
+        function onTrainerRpcDone(res) {
+            hideLoader();
+            if (res && res.status === 'success') {
+                showToast("✅ பதிவு செய்யப்பட்டது!");
+                closeModal('trainerActionModal');
+                loadDatabase();
+            } else {
+                showToast("பிழை: " + ((res && res.message) || "Unknown error"), "danger");
+            }
+        }
+        function onTrainerRpcErr(err) {
+            hideLoader();
+            showToast("Server Error: " + (err && err.message ? err.message : String(err)), "danger");
+        }
+
+        if (nanbanNativeConfigured_() || isBridgeConfigured_()) {
+            apiCall_('processTrainerEntry', trainerActionStudentId, type, attCount, perf, amt, currentUserName)
+                .then(onTrainerRpcDone)
+                .catch(onTrainerRpcErr);
+        } else {
+            google.script.run
+                .withSuccessHandler(onTrainerRpcDone)
+                .withFailureHandler(onTrainerRpcErr)
+                .processTrainerEntry(trainerActionStudentId, type, attCount, perf, amt, currentUserName);
+        }
     }
 
     // 🎯 FIX 3: SPOT CASH IS SAVED AS PENDING (NOT INCOME YET)
@@ -9697,7 +9715,7 @@
     async function loadKmState() { 
         let storedKm = localStorage.getItem('masterStartKm'); 
         let today = getISTDate();
-        let remoteReady = isAppsScriptRuntime_() || isBridgeConfigured_();
+        let remoteReady = isAppsScriptRuntime_() || isBridgeConfigured_() || nanbanNativeConfigured_();
         if (remoteReady) {
             try {
                 let res = await apiCall_('getTrainerKmSessionAction');
@@ -9745,7 +9763,7 @@
             showToast("ஸ்டார்டிங் KM சரியாக உள்ளிடவும்!", "danger");
             return;
         }
-        let remoteReady = isAppsScriptRuntime_() || isBridgeConfigured_();
+        let remoteReady = isAppsScriptRuntime_() || isBridgeConfigured_() || nanbanNativeConfigured_();
         if (remoteReady) {
             showLoader("Starting KM lock...");
             try {
@@ -9873,19 +9891,47 @@
         uploadFileHelper('dcReceiptFile').then(function(receiptUrl) {
             localStorage.setItem('lastSavedKmToday', runKm); 
             try { setHTML('dashKmToday', (parseInt(runKm) || 0) + ' KM'); } catch(e) {}
-            
-            google.script.run
-                .withSuccessHandler(async function() { 
-                    localStorage.removeItem('masterStartKm');
-                    try {
-                        await apiCall_('clearTrainerKmSessionAction');
-                    } catch (e) {}
-                    hideLoader(); closeModal('trainerDayCloseModal'); 
-                    setVal('masterStartKm', ""); setVal('masterEndKm', ""); loadKmState(); loadDatabase(); 
-                    try { updateDashboard(); } catch(e) {}
-                    showToast("✅ கணக்கு முடிக்கப்பட்டு பணம் ஒப்படைக்கப்பட்டது!"); 
-                })
-                .processDayCloseHandover(currentUserName, handoverTo, runKm, JSON.stringify(testResults), 0, 0, expAmt, expDesc, receiptUrl); 
+
+            async function afterDayCloseOk() {
+                localStorage.removeItem('masterStartKm');
+                try {
+                    await apiCall_('clearTrainerKmSessionAction');
+                } catch (e) {}
+                hideLoader(); closeModal('trainerDayCloseModal');
+                setVal('masterStartKm', ""); setVal('masterEndKm', ""); loadKmState(); loadDatabase();
+                try { updateDashboard(); } catch(e) {}
+                showToast("✅ கணக்கு முடிக்கப்பட்டு பணம் ஒப்படைக்கப்பட்டது!");
+            }
+
+            if (nanbanNativeConfigured_() || isBridgeConfigured_()) {
+                apiCall_(
+                    'processDayCloseHandover',
+                    currentUserName,
+                    handoverTo,
+                    runKm,
+                    JSON.stringify(testResults),
+                    0,
+                    0,
+                    expAmt,
+                    expDesc,
+                    receiptUrl || ''
+                )
+                    .then(function() { return afterDayCloseOk(); })
+                    .catch(function(err) {
+                        hideLoader();
+                        showToast("Day close failed: " + (err && err.message ? err.message : String(err)), "danger");
+                    });
+            } else {
+                google.script.run
+                    .withSuccessHandler(async function() {
+                        await afterDayCloseOk();
+                    })
+                    .withFailureHandler(function(err) {
+                        hideLoader();
+                        showToast("Server Error: " + err.toString(), "danger");
+                    })
+                    .processDayCloseHandover(currentUserName, handoverTo, runKm, JSON.stringify(testResults), 0, 0, expAmt, expDesc, receiptUrl);
+            }
         });
     }
 
