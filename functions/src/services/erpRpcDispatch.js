@@ -7,6 +7,9 @@ const {
   getRuntimeDoc,
   setRuntimeDoc
 } = require("./snapshotStore");
+
+/** Firestore doc id for E-Sevai POS (not display name). Path: businesses/ESevai/snapshot/main + runtime/day_state */
+const ESEVAI_BUSINESS_DOC_ID = "ESevai";
 const { notifyAdminsText } = require("./adminNotify");
 const {
   enqueueWaOutboundSend,
@@ -94,11 +97,20 @@ async function uploadBufferToDefaultBucket_({ buf, contentType, rawName }) {
 
   const envBucket = String(process.env.NANBAN_STORAGE_BUCKET || process.env.FIREBASE_STORAGE_BUCKET || "").trim();
   const projectId = String(process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || "").trim();
+  console.log(
+    `NANBAN_STORAGE_CTX projectId=${projectId} env_bucket=${envBucket || "(unset)"} bytes=${buf && buf.length ? buf.length : 0}`
+  );
+  try {
+    const defB = admin.storage().bucket();
+    console.log(`NANBAN_STORAGE_DEFAULT_BUCKET name=${defB.name}`);
+  } catch (probeErr) {
+    console.error(`NANBAN_STORAGE_DEFAULT_BUCKET_PROBE ${String(probeErr && probeErr.message ? probeErr.message : probeErr)}`);
+  }
   /** New projects often use .firebasestorage.app; older ones use .appspot.com. Wrong name → 404 / permission errors. */
   const bucketCandidates = envBucket
     ? [envBucket]
     : projectId
-      ? [`${projectId}.firebasestorage.app`, `${projectId}.appspot.com`]
+      ? [`${projectId}.appspot.com`, `${projectId}.firebasestorage.app`]
       : [];
 
   let lastErr;
@@ -108,14 +120,27 @@ async function uploadBufferToDefaultBucket_({ buf, contentType, rawName }) {
       resumable: false,
       metadata: {
         contentType: contentType || "application/octet-stream",
+        contentDisposition: `inline; filename="${safe.replace(/[^\x20-\x7E]/g, "_").slice(0, 120)}"`,
         metadata: {
           firebaseStorageDownloadTokens: token
         }
       }
     });
     const enc = encodeURIComponent(dest);
-    const url = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${enc}?alt=media&token=${token}`;
-    return { url, id: dest, bucket: bucket.name };
+    const tokenUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${enc}?alt=media&token=${token}`;
+    /** v2 signed URL opens reliably in browser tabs; token URLs often fail with popup / viewer. */
+    let viewUrl = tokenUrl;
+    try {
+      const [signedUrl] = await file.getSignedUrl({
+        version: "v2",
+        action: "read",
+        expires: Date.now() + 1000 * 60 * 60 * 24 * 365
+      });
+      viewUrl = signedUrl;
+    } catch (signErr) {
+      console.error(`NANBAN_LLR_SIGNED_URL_FALLBACK code=${signErr?.code || ""} msg=${String(signErr?.message || signErr)}`);
+    }
+    return { url: viewUrl, id: dest, bucket: bucket.name };
   };
 
   for (const name of bucketCandidates) {
@@ -205,7 +230,7 @@ function parseProcessDayCloseArgs(rawArgs) {
 }
 
 async function loadEsevaiModel(tenantId) {
-  const raw = await getBusinessSnapshotDoc("ESevai");
+  const raw = await getBusinessSnapshotDoc(ESEVAI_BUSINESS_DOC_ID);
   const data = raw && typeof raw === "object" ? { ...raw } : {};
   delete data.students;
   delete data.Students;
@@ -222,11 +247,12 @@ async function loadEsevaiModel(tenantId) {
   data.tenant_id = tenantId;
   data.totalPending = (data.customers || []).reduce((s, c) => s + (parseFloat(c.balance) || 0), 0);
   data.subscription = data.subscription || {};
+  /** Nanban snapshot is never read here — E-Sevai uses businesses/ESevai only (runtime/day_state is written on opening save for ops/debug, not merged on read — avoids clobbering intraday balances). */
   return data;
 }
 
 async function persistEsevai(data) {
-  await setBusinessSnapshotDoc("ESevai", data, true);
+  await setBusinessSnapshotDoc(ESEVAI_BUSINESS_DOC_ID, data, true);
 }
 
 async function saveNanbanPartial(patch) {
@@ -354,6 +380,25 @@ async function handleErpRpc(action, rawArgs) {
             `⚠️ Admission WA notify failed (student ${s.id}): ${String(waErr?.message || waErr)}`
           );
         }
+        const isNewStudent = !prev;
+        if (isNewStudent) {
+          const t = String(s.type || "").trim();
+          try {
+            if (t === "Enquiry") {
+              await notifyAdminsText(
+                tenantId,
+                `📋 *புதிய விசாரணை*\nபெயர்: ${String(s.name || "-")}\nமொபைல்: ${String(s.phone || "-")}\nசர்வீஸ்: ${String(s.service || "-")}\nதேதி: ${String(s.dateJoined || "-")}`
+              );
+            } else if (t) {
+              await notifyAdminsText(
+                tenantId,
+                `🎓 *புதிய அட்மிஷன்*\nபெயர்: ${String(s.name || "-")}\nமொபைல்: ${String(s.phone || "-")}\nவகை: ${t}\nசர்வீஸ்: ${String(s.service || "-")}\nமுன்பணம்: ₹${parseInt(s.advance, 10) || 0}\nதேதி: ${String(s.dateJoined || "-")}`
+              );
+            }
+          } catch (_admErr) {
+            /* non-fatal */
+          }
+        }
         return { status: "success" };
       }
 
@@ -396,6 +441,18 @@ async function handleErpRpc(action, rawArgs) {
         if (dup) return { status: "error", message: "Duplicate expense id" };
         expenses.push(e);
         await saveNanbanPartial({ expenses });
+        const catStr = String(e.cat || "");
+        const isIncome =
+          catStr.includes("வரவு") || /\bincome\b/i.test(catStr) || catStr.includes("(In)");
+        const label = isIncome ? "வரவு (Income)" : "செலவு (Expense)";
+        try {
+          await notifyAdminsText(
+            tenantId,
+            `📒 *${label}*\nதொகை: ₹${Number(e.amt) || 0}\nபிரிவு: ${catStr || "-"}\nசெலவிட்டவர்: ${String(e.spender || "-")}\nவிவரம்: ${String(e.desc || "-").slice(0, 240)}\nதேதி: ${String(e.date || "-")}`
+          );
+        } catch (_expN) {
+          /* non-fatal */
+        }
         return { status: "success", expense: e };
       }
 
@@ -648,8 +705,67 @@ async function handleErpRpc(action, rawArgs) {
       case "saveESevaiOpeningBalanceAction": {
         const b = args[0] || {};
         const data = await loadEsevaiModel(tenantId);
-        data.openingBalance = Object.assign({}, data.openingBalance || {}, b, { date: b.date || getISTDateString() });
+        const today = getISTDateString();
+        const cash = Number(b.Cash) || 0;
+        const sbi = Number(b.SBI) || 0;
+        const fed1 = Number(b["Federal 1"]) || 0;
+        const fed2 = Number(b["Federal 2"]) || 0;
+        const paytm = Number(b.Paytm) || 0;
+        /** Canonical shape (matches client firebaseReady path + GAS RTDB). UI reads balances + openingBalance.date. */
+        data.openingBalance = {
+          date: today,
+          cash,
+          sbi,
+          federal1: fed1,
+          federal2: fed2,
+          paytm
+        };
+        data.balances = {
+          Cash: cash,
+          SBI: sbi,
+          "Federal 1": fed1,
+          "Federal 2": fed2,
+          Paytm: paytm
+        };
+        if (!Array.isArray(data.ledgerEntries)) data.ledgerEntries = [];
+        const desc = `Opening Balance for ${today}`;
+        data.ledgerEntries = data.ledgerEntries.filter(
+          (e) =>
+            !(
+              e &&
+              String(e.category || "").toLowerCase() === "opening balance" &&
+              String(e.date || "") === today
+            )
+        );
+        Object.entries(data.balances).forEach(([acc, amt]) => {
+          const a = Number(amt) || 0;
+          if (a > 0) {
+            data.ledgerEntries.unshift({
+              date: today,
+              type: "income",
+              category: "Opening Balance",
+              description: desc,
+              amount: a,
+              account: acc
+            });
+          }
+        });
         await persistEsevai(data);
+        await setRuntimeDoc(
+          ESEVAI_BUSINESS_DOC_ID,
+          "day_state",
+          {
+            opening_date: today,
+            openingBalance: data.openingBalance,
+            balances: data.balances,
+            tenant_id: tenantId,
+            business_doc_id: ESEVAI_BUSINESS_DOC_ID
+          },
+          true
+        );
+        console.log(
+          `ESEVAI_OPENING_SAVED doc=${ESEVAI_BUSINESS_DOC_ID} date=${today} cash=${cash} tenant=${tenantId}`
+        );
         return { status: "success" };
       }
 

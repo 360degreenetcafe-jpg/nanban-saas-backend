@@ -13,12 +13,35 @@ const WA_OUTBOUND_MAX_ATTEMPTS = 10;
  */
 const WA_OUTBOUND_TASK_QUEUE_REF =
   process.env.WA_OUTBOUND_TASK_QUEUE_REF || "locations/asia-south1/functions/waOutboundWorker";
-const DEFAULT_DLQ_ALERT_ADMIN_PHONES = {
-  nanban_main: ["919092036666", "919942391870"]
-};
+const { getResolvedAdminPhonesForTenant } = require("./adminPhoneResolve");
 
 function cleanPhone(phone) {
   return String(phone || "").replace(/[^\d]/g, "");
+}
+
+/**
+ * Extract Google Drive file id from /file/d/ID/, ?id=ID, or raw id string.
+ */
+function extractGoogleDriveFileId_(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  let m = s.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (m) return m[1];
+  m = s.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (m) return m[1];
+  if (/^[a-zA-Z0-9_-]{20,}$/.test(s) && s.indexOf("/") === -1 && s.indexOf("http") !== 0) return s;
+  return "";
+}
+
+/**
+ * Meta WhatsApp Cloud API rejects many Drive /view links; use direct download URL.
+ */
+function normalizeMetaWhatsappMediaLink_(raw) {
+  const u = String(raw || "").trim();
+  if (!u) return u;
+  const id = extractGoogleDriveFileId_(u);
+  if (id) return `https://drive.google.com/uc?export=download&id=${id}`;
+  return u;
 }
 
 /** Public HTTPS image/video URLs suitable for WhatsApp Cloud API `link` fields. */
@@ -92,14 +115,19 @@ async function enqueueWaOutboundSend(taskPayload, options) {
     const t = { ...taskPayload.template };
     if (isDailyQuizBtnTemplate_(t.name)) {
       delete t.headerImageLink;
+    } else if (t.headerImageLink) {
+      t.headerImageLink = normalizeMetaWhatsappMediaLink_(String(t.headerImageLink).trim());
     }
     payload.template = t;
   }
   if (String(taskPayload?.imageLink || "").trim()) {
-    payload.imageLink = String(taskPayload.imageLink).trim();
+    payload.imageLink = normalizeMetaWhatsappMediaLink_(String(taskPayload.imageLink).trim());
   }
   if (String(taskPayload?.imageCaption || "").trim()) {
     payload.imageCaption = String(taskPayload.imageCaption).trim();
+  }
+  if (taskPayload?.interactive && typeof taskPayload.interactive === "object") {
+    payload.interactive = taskPayload.interactive;
   }
 
   if (!payload.tenantId) throw new Error("enqueueWaOutboundSend: tenantId required");
@@ -110,8 +138,15 @@ async function enqueueWaOutboundSend(taskPayload, options) {
     Array.isArray(payload.template.bodyParams);
   const isImageMsg =
     String(payload.messageType || "").toLowerCase() === "image" && isUsableWaMediaUrl(payload.imageLink);
-  if (!String(payload.message || "").trim() && !hasTemplate && !isImageMsg) {
-    throw new Error("enqueueWaOutboundSend: message, image, or template with bodyParams required");
+  const inter = payload.interactive;
+  const hasInteractiveList =
+    inter &&
+    String(inter.type || "").toLowerCase() === "list" &&
+    inter.action &&
+    Array.isArray(inter.action.sections) &&
+    inter.action.sections.length > 0;
+  if (!String(payload.message || "").trim() && !hasTemplate && !isImageMsg && !hasInteractiveList) {
+    throw new Error("enqueueWaOutboundSend: message, image, interactive list, or template with bodyParams required");
   }
 
   // Local/mock mode for integration tests (no Cloud Tasks dependency).
@@ -146,7 +181,10 @@ async function enqueueWaOutboundSend(taskPayload, options) {
   info("WA_OUTBOUND_TASK_ENQUEUED", {
     tenantId: payload.tenantId,
     to: payload.to,
-    scheduleDelaySeconds
+    scheduleDelaySeconds,
+    messageType: payload.messageType,
+    outboundKind: payload.metadata?.outbound_kind || "",
+    taskKind: payload.metadata?.kind || ""
   });
   return { enqueued: true, mode: "cloud_tasks" };
 }
@@ -206,17 +244,7 @@ async function persistOutboundEvent_(taskPayload, responseObj) {
 async function getTenantAdminPhones_(tenantId) {
   const tid = String(tenantId || "").trim();
   if (!tid) return [];
-  const db = admin.firestore();
-  try {
-    const snap = await db.collection("platform_tenants").doc(tid).get();
-    if (snap.exists) {
-      const data = snap.data() || {};
-      if (Array.isArray(data.admin_phones) && data.admin_phones.length) {
-        return data.admin_phones.map(cleanPhone).filter(Boolean);
-      }
-    }
-  } catch (e) {}
-  return (DEFAULT_DLQ_ALERT_ADMIN_PHONES[tid] || []).map(cleanPhone).filter(Boolean);
+  return getResolvedAdminPhonesForTenant(tid);
 }
 
 async function persistDlqRecord_({ tenantId, taskPayload, reason, attemptMeta }) {
@@ -235,6 +263,7 @@ async function persistDlqRecord_({ tenantId, taskPayload, reason, attemptMeta })
     message: String(taskPayload?.message || ""),
     message_type: String(taskPayload?.messageType || "text"),
     template: taskPayload?.template || null,
+    interactive: taskPayload?.interactive || null,
     metadata: taskPayload?.metadata || {},
     failure_reason: String(reason || "unknown_error"),
     retry_count: Number(attemptMeta?.retryCount || 0),
@@ -313,7 +342,7 @@ async function sendTextViaMeta_(taskPayload, waToken, waPhoneId) {
 }
 
 async function sendImageMessageViaMeta_(taskPayload, waToken, waPhoneId) {
-  const link = String(taskPayload.imageLink || "").trim();
+  const link = normalizeMetaWhatsappMediaLink_(String(taskPayload.imageLink || "").trim());
   const cap = String(taskPayload.imageCaption || "").trim().slice(0, 1024);
   const url = `https://graph.facebook.com/v20.0/${waPhoneId}/messages`;
   const imagePayload = { link };
@@ -348,7 +377,7 @@ async function sendTemplateViaMeta_(taskPayload, waToken, waPhoneId) {
   const lang = String(tpl.languageCode || "ta").trim() || "ta";
   const bodyParams = Array.isArray(tpl.bodyParams) ? tpl.bodyParams : [];
   const components = [];
-  const headerLink = String(tpl.headerImageLink || "").trim();
+  const headerLink = normalizeMetaWhatsappMediaLink_(String(tpl.headerImageLink || "").trim());
   /** Meta template is text-only + quick replies — never send an image header or Graph rejects. */
   const allowHeader = isUsableWaMediaUrl(headerLink) && !isDailyQuizBtnTemplate_(name);
   if (allowHeader) {
@@ -398,6 +427,33 @@ async function sendTemplateViaMeta_(taskPayload, waToken, waPhoneId) {
   return { ok: res.ok, status: res.status, body: parsed };
 }
 
+async function sendInteractiveListViaMeta_(taskPayload, waToken, waPhoneId) {
+  const inter = taskPayload.interactive;
+  const url = `https://graph.facebook.com/v20.0/${waPhoneId}/messages`;
+  const body = {
+    messaging_product: "whatsapp",
+    to: cleanPhone(taskPayload.to),
+    type: "interactive",
+    interactive: inter
+  };
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${waToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  const text = await res.text();
+  let parsed = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    parsed = { raw: text };
+  }
+  return { ok: res.ok, status: res.status, body: parsed };
+}
+
 /**
  * Cloud Tasks worker handler.
  * Retries/backoff are configured in index.js onTaskDispatched retryConfig.
@@ -436,12 +492,40 @@ function createWaOutboundWorker({ getWaToken, getWaPhoneId }) {
       const textBody = String(taskPayload.message || "").trim();
       const msgType = String(taskPayload.messageType || "text").toLowerCase();
       const imageLink = String(taskPayload.imageLink || "").trim();
+      const inter = taskPayload.interactive;
+      const hasInteractiveList =
+        inter &&
+        String(inter.type || "").toLowerCase() === "list" &&
+        inter.action &&
+        Array.isArray(inter.action.sections) &&
+        inter.action.sections.length > 0;
 
       let result;
       let usedKind = "text";
 
-      if (msgType === "image" && imageLink) {
-        if (!isUsableWaMediaUrl(imageLink)) {
+      if (msgType === "interactive_list" && hasInteractiveList) {
+        result = await sendInteractiveListViaMeta_(taskPayload, waToken, waPhoneId);
+        usedKind = "interactive";
+        if (!result.ok) {
+          warn("WA_OUTBOUND_INTERACTIVE_LIST_FAILED_TRY_FALLBACK", {
+            tenantId,
+            to: taskPayload?.to || "",
+            status: result.status
+          });
+          const tplName = String(tpl?.name || "").trim();
+          if (tplName && Array.isArray(tpl.bodyParams)) {
+            result = await sendTemplateViaMeta_(taskPayload, waToken, waPhoneId);
+            if (result.ok) usedKind = "template";
+          }
+          if (!result.ok && textBody) {
+            result = await sendTextViaMeta_(taskPayload, waToken, waPhoneId);
+            if (result.ok) usedKind = "text";
+          }
+        }
+      } else if (msgType === "image" && imageLink) {
+        const imageLinkNorm = normalizeMetaWhatsappMediaLink_(imageLink);
+        const payloadImg = Object.assign({}, taskPayload, { imageLink: imageLinkNorm });
+        if (!isUsableWaMediaUrl(imageLinkNorm)) {
           warn("WA_OUTBOUND_IMAGE_SKIPPED_BAD_URL", { tenantId, to: taskPayload?.to || "" });
           if (textBody) {
             result = await sendTextViaMeta_(taskPayload, waToken, waPhoneId);
@@ -452,7 +536,7 @@ function createWaOutboundWorker({ getWaToken, getWaPhoneId }) {
             return;
           }
         } else {
-          result = await sendImageMessageViaMeta_(taskPayload, waToken, waPhoneId);
+          result = await sendImageMessageViaMeta_(payloadImg, waToken, waPhoneId);
           usedKind = "image";
         }
       } else if (tryTemplateFirst) {
@@ -559,6 +643,9 @@ async function replayDlqMessage({ tenantId, dlqId, replayedBy }) {
   if (data.template && typeof data.template === "object") {
     taskPayload.template = data.template;
   }
+  if (data.interactive && typeof data.interactive === "object") {
+    taskPayload.interactive = data.interactive;
+  }
 
   await enqueueWaOutboundSend(taskPayload, { delaySeconds: 0 });
   await ref.set(
@@ -581,5 +668,6 @@ module.exports = {
   replayDlqMessage,
   TENANT_PER_MINUTE_LIMIT,
   WA_OUTBOUND_MAX_ATTEMPTS,
-  isUsableWaMediaUrl
+  isUsableWaMediaUrl,
+  normalizeMetaWhatsappMediaLink_
 };

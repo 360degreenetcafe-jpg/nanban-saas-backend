@@ -21,6 +21,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-storage-compat.js"></script>
     
     <style>
         /* =========================================================
@@ -2916,6 +2917,7 @@
         <div style="text-align:center; margin-bottom:20px;">
             <div style="font-size:40px; margin-bottom:10px;">🏦</div>
             <h2 style="color:var(--es-primary); font-weight:900;">இன்றைய கணக்குத் தொடக்கம்</h2>
+            <p id="esOpeningModalDateLine" style="font-size:14px; color:var(--es-primary); font-weight:800; margin-top:6px;"></p>
             <p style="font-size:12px; color:gray; font-weight:700;">(Opening Balance Entry Required)</p>
         </div>
 
@@ -4454,9 +4456,10 @@
                         <button class="btn btn-w" style="padding:15px;" onclick="saveVehicleKmSettings()">💾 Save KM</button>
                     </div>
                     <div style="margin-top:18px;">
-                        <label>Trainer WhatsApp alert</label>
+                        <label>Admin / partner WhatsApp alerts (comma-separated)</label>
+                        <p style="font-size:11px; color:var(--text-muted); margin:4px 0 6px;">உதா: 919876543210, 918765432109 — அனைத்து அட்மிஷன் / விசாரணை / வரவு-செலவு அலர்ட்கள் இங்கே உள்ள எண்களுக்குச் செல்லும்.</p>
                         <div style="display:flex; gap:10px; margin-top:6px;">
-                            <input type="tel" inputmode="numeric" id="trainerAlertNum" placeholder="10-digit" style="margin:0; flex:1;" maxlength="10" autocomplete="off" oninput="this.value=this.value.replace(/\D/g,'').slice(0,10);">
+                            <input type="text" id="trainerAlertNum" placeholder="919xxxxxxxxx, 918xxxxxxxxx" style="margin:0; flex:1;" maxlength="512" autocomplete="off">
                             <button class="btn btn-p" style="padding:10px 20px;" onclick="saveTrainerAlertNum()">Save</button>
                         </div>
                     </div>
@@ -4599,6 +4602,9 @@
         if (el) {
             el.style.display = 'flex'; 
             modalStack.push(id);
+            if (id === 'esOpeningModal' && typeof refreshESOpeningModalHeader_ === 'function') {
+                try { refreshESOpeningModalHeader_(); } catch (e) {}
+            }
             // Push a dummy state to history so the back button closes the modal
             history.pushState({ modalId: id }, "");
         }
@@ -4673,6 +4679,10 @@
             }
             return u;
         }
+        if (u.indexOf('nanban_llr/') === 0 && firebaseConfig && firebaseConfig.projectId) {
+            var b = firebaseConfig.storageBucket || firebaseConfig.projectId + '.appspot.com';
+            return 'https://firebasestorage.googleapis.com/v0/b/' + b + '/o/' + encodeURIComponent(u) + '?alt=media';
+        }
         if (/^[a-zA-Z0-9_-]{20,}$/.test(u) && u.indexOf('/') === -1) {
             return 'https://drive.google.com/file/d/' + u + '/view';
         }
@@ -4689,7 +4699,45 @@
         console.log("Opening PDF URL:", u);
         var opened = window.open(u, "_blank", "noopener,noreferrer");
         if (!opened) {
-            try { showToast("பாப்-அப் தடுக்கப்பட்டது. URL ஐ கைமுறையாக திறக்கவும்.", "warning"); } catch (e2) {}
+            try {
+                var a = document.createElement("a");
+                a.href = u;
+                a.target = "_blank";
+                a.rel = "noopener noreferrer";
+                a.style.display = "none";
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            } catch (e3) {
+                try { showToast("பாப்-அப் தடுக்கப்பட்டது — URL ஐ அனுமதிக்கவும்.", "warning"); } catch (e2) {}
+            }
+        }
+    }
+
+    function renderProfLlrViewButtons_(llrBox, openUrl, llrStatusHtml) {
+        llrBox.innerHTML = "";
+        var wrap = document.createElement("div");
+        wrap.style.cssText = "display:flex;flex-direction:column;gap:8px;margin-top:6px;";
+        var u = String(openUrl || "").trim();
+        function addBtn(text, primary) {
+            var b = document.createElement("button");
+            b.type = "button";
+            b.textContent = text;
+            b.style.cssText = primary
+                ? "padding:10px 14px;font-size:13px;font-weight:800;cursor:pointer;background:var(--success);color:#fff;border:2px solid #15803d;border-radius:10px;"
+                : "padding:8px 12px;font-size:12px;font-weight:700;cursor:pointer;background:var(--secondary);color:#fff;border:none;border-radius:8px;";
+            b.onclick = function(ev) {
+                ev.preventDefault();
+                ev.stopPropagation();
+                openNanbanLlrDocument_(u);
+            };
+            wrap.appendChild(b);
+        }
+        addBtn("ஆவணம் உள்ளது — திற", true);
+        addBtn("📄 VIEW / PDF", false);
+        llrBox.appendChild(wrap);
+        if (llrStatusHtml) {
+            llrBox.insertAdjacentHTML("beforeend", llrStatusHtml);
         }
     }
 
@@ -5602,11 +5650,7 @@
                 }
                 throw new Error(err || 'rpc_failed');
             }
-            var result = o.j.result;
-            if (result && result.status === "error") {
-                throw new Error(String(result.message || "server_error"));
-            }
-            return result;
+            return o.j.result;
         });
     }
 
@@ -5643,6 +5687,23 @@
             if (tenant) args.push(tenant);
         } catch (e) {}
         return unifiedRunCall_(String(fnName || ''), args);
+    }
+
+    /**
+     * Secondary RPCs (WhatsApp receipt, welcome) after save — failures must not show as scary console errors
+     * while the UI already showed success for the main save.
+     */
+    function nanbanFireOptionalRpc_(fnName) {
+        var args = Array.prototype.slice.call(arguments, 1);
+        apiCall_.apply(null, [fnName].concat(args))
+            .then(function(r) {
+                if (r && r.status === "error") {
+                    console.debug("[nanban optional]", fnName, r.message || "");
+                }
+            })
+            .catch(function(e) {
+                console.debug("[nanban optional]", fnName, e && e.message ? e.message : String(e));
+            });
     }
 
     /**
@@ -5704,7 +5765,7 @@
                             if (typeof failureHandler === 'function') {
                                 failureHandler({ message: err && err.message ? err.message : String(err) });
                             } else {
-                                console.warn("Server call error:", err);
+                                console.debug("Server call error (no handler):", err && err.message ? err.message : err);
                             }
                         });
                 };
@@ -5756,11 +5817,30 @@
         return `${p[2]}/${p[1]}/${p[0]}`;
     }
 
-    function getISTDate() { 
-        let d = new Date(); 
-        let day = String(d.getDate()).padStart(2, '0'); 
-        let month = String(d.getMonth() + 1).padStart(2, '0'); 
-        return `${day}/${month}/${d.getFullYear()}`; 
+    function getISTDate() {
+        try {
+            var fmt = new Intl.DateTimeFormat("en-GB", {
+                timeZone: "Asia/Kolkata",
+                day: "2-digit",
+                month: "2-digit",
+                year: "numeric"
+            });
+            var parts = fmt.formatToParts(new Date());
+            var get = function(t) {
+                var p = parts.find(function(x) { return x.type === t; });
+                return p ? p.value : "";
+            };
+            return get("day") + "/" + get("month") + "/" + get("year");
+        } catch (e) {
+            var d = new Date();
+            return (
+                String(d.getDate()).padStart(2, "0") +
+                "/" +
+                String(d.getMonth() + 1).padStart(2, "0") +
+                "/" +
+                d.getFullYear()
+            );
+        }
     }
 
     function ensureStudentFeesResolved_(list) {
@@ -5818,6 +5898,90 @@
         firebaseReady = false;
         firebaseDb = null;
         return false;
+    }
+
+    function nanbanEnsureFirebaseAppForStorage_() {
+        if (!(window.firebase && typeof firebase.initializeApp === "function")) {
+            throw new Error("Firebase SDK not loaded");
+        }
+        if (!firebaseApp) {
+            if (firebase.apps && firebase.apps.length) firebaseApp = firebase.app();
+            else firebaseApp = firebase.initializeApp(firebaseConfig);
+        }
+        return firebaseApp;
+    }
+
+    function nanbanDataUrlToBlob_(dataUrl) {
+        var s = String(dataUrl || "");
+        var i = s.indexOf(",");
+        if (i === -1) throw new Error("invalid_data_url");
+        var head = s.slice(0, i);
+        var body = s.slice(i + 1);
+        var mime = "application/octet-stream";
+        var cm = head.match(/^data:([^;]+)/i);
+        if (cm) mime = (cm[1] || "").trim() || mime;
+        var isB64 = /;base64/i.test(head);
+        var bin;
+        try {
+            bin = isB64 ? atob(body.replace(/\s/g, "")) : decodeURIComponent(body);
+        } catch (e) {
+            throw new Error("decode_failed");
+        }
+        var len = bin.length;
+        var bytes = new Uint8Array(len);
+        for (var j = 0; j < len; j++) bytes[j] = bin.charCodeAt(j);
+        return new Blob([bytes], { type: mime });
+    }
+
+    function nanbanSafeLlrFileName_(raw) {
+        var base = String(raw || "document")
+            .replace(/[^a-zA-Z0-9._-]+/g, "_")
+            .slice(0, 120);
+        return base || "document";
+    }
+
+    /**
+     * LLR/PDF/image → Firebase Storage (nanban_llr/). Avoids Cloud Functions Admin SDK / IAM on upload.
+     * Resolves { status: "success", url, id } where id is the Storage object path.
+     */
+    function nanbanClientUploadLlrFromDataUrl_(dataUrl, rawFileName) {
+        return new Promise(function(resolve, reject) {
+            try {
+                nanbanEnsureFirebaseAppForStorage_();
+                if (!firebase.storage) {
+                    reject(new Error("storage_sdk_missing"));
+                    return;
+                }
+                var blob = nanbanDataUrlToBlob_(dataUrl);
+                var ct = blob.type || "application/octet-stream";
+                if ((!ct || ct === "application/octet-stream") && /\.pdf$/i.test(String(rawFileName || ""))) {
+                    ct = "application/pdf";
+                }
+                var safe = nanbanSafeLlrFileName_(rawFileName);
+                var dest =
+                    "nanban_llr/" +
+                    Date.now() +
+                    "_" +
+                    Math.random().toString(16).slice(2, 10) +
+                    "_" +
+                    safe;
+                firebase
+                    .storage()
+                    .ref(dest)
+                    .put(blob, { contentType: ct })
+                    .then(function(snapshot) {
+                        return snapshot.ref.getDownloadURL();
+                    })
+                    .then(function(url) {
+                        resolve({ status: "success", url: String(url), id: dest });
+                    })
+                    .catch(function(err) {
+                        reject(err);
+                    });
+            } catch (e) {
+                reject(e);
+            }
+        });
     }
 
     function getNanbanNativeApiBase_() {
@@ -6795,6 +6959,17 @@
         });
     }
 
+    function normalizeESevaiOpeningBalance_(ob) {
+        if (!ob || typeof ob !== "object") return null;
+        var d = ob.date || ob.Date || "";
+        var cash = Number(ob.cash !== undefined ? ob.cash : ob.Cash) || 0;
+        var sbi = Number(ob.sbi !== undefined ? ob.sbi : ob.SBI) || 0;
+        var f1 = Number(ob.federal1 !== undefined ? ob.federal1 : ob["Federal 1"]) || 0;
+        var f2 = Number(ob.federal2 !== undefined ? ob.federal2 : ob["Federal 2"]) || 0;
+        var paytm = Number(ob.paytm !== undefined ? ob.paytm : ob.Paytm) || 0;
+        return { date: d, cash: cash, sbi: sbi, federal1: f1, federal2: f2, paytm: paytm };
+    }
+
     function normalizeESevaiDataModel(src) {
         src = src || {};
         let out = Object.assign({
@@ -6908,6 +7083,27 @@
         delete out.students;
         delete out.expenses;
         delete out.chitData;
+
+        out.openingBalance = normalizeESevaiOpeningBalance_(out.openingBalance);
+        if (out.openingBalance && out.openingBalance.date) {
+            var ob = out.openingBalance;
+            var sumBal =
+                (parseInt(out.balances.Cash, 10) || 0) +
+                (parseInt(out.balances.SBI, 10) || 0) +
+                (parseInt(out.balances["Federal 1"], 10) || 0) +
+                (parseInt(out.balances["Federal 2"], 10) || 0) +
+                (parseInt(out.balances.Paytm, 10) || 0);
+            var sumOb = ob.cash + ob.sbi + ob.federal1 + ob.federal2 + ob.paytm;
+            if (sumBal === 0 && sumOb > 0) {
+                out.balances = {
+                    Cash: ob.cash,
+                    SBI: ob.sbi,
+                    "Federal 1": ob.federal1,
+                    "Federal 2": ob.federal2,
+                    Paytm: ob.paytm
+                };
+            }
+        }
 
         return out;
     }
@@ -8072,19 +8268,19 @@
             } else if (nanbanNativeConfigured_()) {
                 processFileUpload(file, function(p) {
                     if (!p) return;
-                    showLoader("Uploading document...");
-                    apiCall_("uploadFileToDrive", p.data, p.name)
+                    showLoader("Uploading document…");
+                    nanbanClientUploadLlrFromDataUrl_(p.data, p.name)
                         .then(function(r) {
-                            if (r && r.url) {
+                            if (r && r.status === "success" && r.url) {
                                 processSaving(String(r.url), String(r.id || ""), p.type);
                             } else {
-                                showToast("⚠️ Upload Failed", "danger");
+                                showToast("⚠️ Upload failed", "danger");
                                 processSaving("", "", "");
                             }
                         })
                         .catch(function(err) {
-                            console.warn("uploadFileToDrive", err);
-                            showToast("⚠️ Upload Failed", "danger");
+                            console.warn("nanbanClientUploadLlrFromDataUrl_", err);
+                            showToast("⚠️ " + (err && err.message ? err.message : "Upload failed"), "danger");
                             processSaving("", "", "");
                         });
                 });
@@ -8131,15 +8327,17 @@
                     finishUp("அட்மிஷன் அப்டேட் ஆனது!");
                     if (gasSave) {
                         try { google.script.run.updateStudentData(existing); } catch (e) {}
-                        if (adv > 0) { try { google.script.run.sendDigitalFeeReceiptAction(existing.id, adv, logName, currentUserName); } catch(e) {} }
-                        try { google.script.run.sendWelcomeMessageAction(existing.id); } catch(e) {}
+                        if (adv > 0) {
+                            nanbanFireOptionalRpc_("sendDigitalFeeReceiptAction", existing.id, adv, logName, currentUserName);
+                        }
+                        nanbanFireOptionalRpc_("sendWelcomeMessageAction", existing.id);
                     }
                 } else {
                     google.script.run.withSuccessHandler(function() { 
-                        if (adv > 0) { 
-                            try { google.script.run.sendDigitalFeeReceiptAction(existing.id, adv, logName, currentUserName); } catch(e) {} 
+                        if (adv > 0) {
+                            nanbanFireOptionalRpc_("sendDigitalFeeReceiptAction", existing.id, adv, logName, currentUserName);
                         }
-                        try { google.script.run.sendWelcomeMessageAction(existing.id); } catch(e) {}
+                        nanbanFireOptionalRpc_("sendWelcomeMessageAction", existing.id);
                         finishUp("அட்மிஷன் அப்டேட் ஆனது!"); 
                         setTimeout(function() {
                             if (nanbanNativeConfigured_()) { try { nanbanAfterAdmissionSave_(existing, { isNewAdmission: false, waViaSnapshot: false }); } catch (e) {} }
@@ -8683,15 +8881,7 @@
             var hasHttp = openUrl && /^https?:\/\//i.test(String(openUrl).trim());
 
             if (hasHttp) {
-                var enc = encodeURIComponent(String(openUrl).trim());
-                llrBox.innerHTML =
-                    '<div style="display:flex; flex-direction:column; gap:8px; margin-top:6px;">' +
-                    '<button type="button" style="padding:10px 14px; font-size:13px; font-weight:800; cursor:pointer; background:var(--success); color:#fff; border:2px solid #15803d; border-radius:10px;" ' +
-                    'onclick="event.preventDefault(); event.stopPropagation(); openNanbanLlrDocumentFromEncoded_(\'' + enc + '\'); return false;">ஆவணம் உள்ளது — திற</button>' +
-                    '<button type="button" style="padding:8px 12px; font-size:12px; font-weight:700; cursor:pointer; background:var(--secondary); color:#fff; border:none; border-radius:8px;" ' +
-                    'onclick="event.preventDefault(); event.stopPropagation(); openNanbanLlrDocumentFromEncoded_(\'' + enc + '\'); return false;">📄 VIEW / PDF</button>' +
-                    "</div>" +
-                    llrStatusHtml;
+                renderProfLlrViewButtons_(llrBox, openUrl, llrStatusHtml);
             } else if (s.llrStatus === "Yes" && s.llrDate) {
                 llrBox.innerHTML =
                     '<p style="margin:8px 0 0 0; font-size:12px; color:var(--warning); font-weight:700;">LLR தேதி உள்ளது; PDF இணைப்பு Firestore-ல் இல்லை. Edit மூலம் கோப்பை மீண்டும் ஏற்றி சேமிக்கவும்.</p>' +
@@ -9009,23 +9199,23 @@
             processFileUpload(file, function(p) { 
                 if (!p) return;
                 function afterUpload(res) {
-                    if (res && res.url) {
+                    if (res && res.url && (!nanbanNativeConfigured_() || res.status === "success")) {
                         s.llrDocUrl = String(res.url);
                         s.llrDocId = String(res.id || "");
                         s.llrStatus = "Yes";
                         s.llrDate = newLlrDate;
                     } else if (nanbanNativeConfigured_()) {
-                        showToast("⚠️ LLR கோப்பு upload தோல்வி", "danger");
+                        showToast("⚠️ LLR upload: " + ((res && res.message) || "failed"), "danger");
                     }
                     finishProfSave(s, amt, receiver);
                 }
                 if (nanbanNativeConfigured_()) {
-                    showLoader("Uploading LLR document...");
-                    apiCall_("uploadFileToDrive", p.data, p.name)
+                    showLoader("Uploading LLR document…");
+                    nanbanClientUploadLlrFromDataUrl_(p.data, p.name)
                         .then(afterUpload)
                         .catch(function(err) {
-                            console.warn("saveProfileEdit uploadFileToDrive", err);
-                            showToast("⚠️ LLR கோப்பு upload தோல்வி", "danger");
+                            console.warn("saveProfileEdit client storage", err);
+                            showToast("⚠️ " + (err && err.message ? err.message : "LLR upload failed"), "danger");
                             finishProfSave(s, amt, receiver);
                         });
                     return;
@@ -9048,17 +9238,56 @@
         } 
     }
 
-    function finishProfSave(s, receiptAmt = 0, receiptReceiver = "") { 
-        hideLoader(); 
-        showToast("✅ அப்டேட் ஆகிவிட்டது!", "success"); 
-        google.script.run.updateStudentData(s); 
-        if (parseInt(receiptAmt) > 0) { 
-            try { google.script.run.sendDigitalFeeReceiptAction(editTargetId, receiptAmt, receiptReceiver, currentUserName); } catch(e) {} 
+    function finishProfSave(s, receiptAmt = 0, receiptReceiver = "") {
+        if (nanbanNativeConfigured_()) {
+            showLoader("Saving profile…");
+            apiCall_("updateStudentData", s)
+                .then(function(r) {
+                    hideLoader();
+                    if (r && r.status === "success") {
+                        showToast("✅ அப்டேட் ஆகிவிட்டது!", "success");
+                        if (parseInt(receiptAmt) > 0) {
+                            nanbanFireOptionalRpc_(
+                                "sendDigitalFeeReceiptAction",
+                                editTargetId,
+                                receiptAmt,
+                                receiptReceiver,
+                                currentUserName
+                            );
+                        }
+                        closeModal("profileModal");
+                        localStorage.setItem(
+                            "nanban_db_cache",
+                            JSON.stringify({ students: studentsData, expenses: expensesData })
+                        );
+                        renderStudentList();
+                        updateDashboard();
+                    } else {
+                        showToast("சேமிப்பு தோல்வி: " + ((r && r.message) || ""), "danger");
+                    }
+                })
+                .catch(function(e) {
+                    hideLoader();
+                    showToast("சேமிப்பு தோல்வி: " + (e.message || String(e)), "danger");
+                });
+            return;
         }
-        closeModal('profileModal'); 
-        localStorage.setItem('nanban_db_cache', JSON.stringify({students: studentsData, expenses: expensesData})); 
-        renderStudentList(); 
-        updateDashboard(); 
+        hideLoader();
+        showToast("✅ அப்டேட் ஆகிவிட்டது!", "success");
+        google.script.run.updateStudentData(s);
+        if (parseInt(receiptAmt) > 0) {
+            nanbanFireOptionalRpc_(
+                "sendDigitalFeeReceiptAction",
+                editTargetId,
+                receiptAmt,
+                receiptReceiver,
+                currentUserName
+            );
+        }
+        closeModal("profileModal");
+        localStorage.setItem("nanban_db_cache", JSON.stringify({ students: studentsData, expenses: expensesData }));
+        renderStudentList();
+        updateDashboard();
     }
 
     function submitReTest() { 
@@ -9146,22 +9375,22 @@
             processFileUpload(file, function(p) { 
                 if (!p) return;
                 function afterUpload(res) {
-                    if (res && res.url) {
+                    if (res && res.url && (!nanbanNativeConfigured_() || res.status === "success")) {
                         s.llrDocUrl = String(res.url);
                         s.llrDocId = String(res.id || "");
                         s.llrStatus = "Yes";
                     } else if (nanbanNativeConfigured_()) {
-                        showToast("⚠️ LLR கோப்பு upload தோல்வி", "danger");
+                        showToast("⚠️ LLR upload: " + ((res && res.message) || "failed"), "danger");
                     }
                     finishEditSave(s);
                 }
                 if (nanbanNativeConfigured_()) {
-                    showLoader("Uploading LLR document...");
-                    apiCall_("uploadFileToDrive", p.data, p.name)
+                    showLoader("Uploading LLR document…");
+                    nanbanClientUploadLlrFromDataUrl_(p.data, p.name)
                         .then(afterUpload)
                         .catch(function(err) {
-                            console.warn("saveEditedStudent uploadFileToDrive", err);
-                            showToast("⚠️ LLR கோப்பு upload தோல்வி", "danger");
+                            console.warn("saveEditedStudent client storage", err);
+                            showToast("⚠️ " + (err && err.message ? err.message : "LLR upload failed"), "danger");
                             finishEditSave(s);
                         });
                     return;
@@ -9180,19 +9409,44 @@
         } 
     }
 
-    function finishEditSave(s) { 
-        hideLoader(); 
-        if (!Array.isArray(s.adminRemarks)) { s.adminRemarks = []; } 
-        s.adminRemarks.unshift({date: getISTDate(), text: `✏️ புரொபைல் எடிட் செய்யப்பட்டது`}); 
-        
-        showToast("✅ திருத்தங்கள் சேமிக்கப்பட்டன!"); 
-        google.script.run.updateStudentData(s); 
-        closeModal('editStudentModal'); 
-        localStorage.setItem('nanban_db_cache', JSON.stringify({students: studentsData, expenses: expensesData})); 
-        
-        openProfile(s.id); 
-        renderStudentList(); 
-        updateDashboard(); 
+    function finishEditSave(s) {
+        if (!Array.isArray(s.adminRemarks)) s.adminRemarks = [];
+        s.adminRemarks.unshift({ date: getISTDate(), text: "✏️ புரொபைல் எடிட் செய்யப்பட்டது" });
+
+        if (nanbanNativeConfigured_()) {
+            showLoader("Saving edits…");
+            apiCall_("updateStudentData", s)
+                .then(function(r) {
+                    hideLoader();
+                    if (r && r.status === "success") {
+                        showToast("✅ திருத்தங்கள் சேமிக்கப்பட்டன!");
+                        closeModal("editStudentModal");
+                        localStorage.setItem(
+                            "nanban_db_cache",
+                            JSON.stringify({ students: studentsData, expenses: expensesData })
+                        );
+                        openProfile(s.id);
+                        renderStudentList();
+                        updateDashboard();
+                    } else {
+                        showToast("சேமிப்பு தோல்வி: " + ((r && r.message) || ""), "danger");
+                    }
+                })
+                .catch(function(e) {
+                    hideLoader();
+                    showToast("சேமிப்பு தோல்வி: " + (e.message || String(e)), "danger");
+                });
+            return;
+        }
+
+        hideLoader();
+        showToast("✅ திருத்தங்கள் சேமிக்கப்பட்டன!");
+        google.script.run.updateStudentData(s);
+        closeModal("editStudentModal");
+        localStorage.setItem("nanban_db_cache", JSON.stringify({ students: studentsData, expenses: expensesData }));
+        openProfile(s.id);
+        renderStudentList();
+        updateDashboard();
     }
 
     function deleteStudent() { 
@@ -9765,8 +10019,8 @@
                 google.script.run.withSuccessHandler(function() { 
                     hideLoader(); closeModal('trainerQuickAddModal'); showToast("✅ மாணவருக்கு பயிற்சி சேர்க்கப்பட்டது!"); 
                     localStorage.setItem('nanban_db_cache', JSON.stringify({students: studentsData, expenses: expensesData})); 
-                    if (adv > 0) { 
-                        try { google.script.run.sendDigitalFeeReceiptAction(s.id, adv, currentUserName, currentUserName); } catch(e) {} 
+                    if (adv > 0) {
+                        nanbanFireOptionalRpc_("sendDigitalFeeReceiptAction", s.id, adv, currentUserName, currentUserName);
                     }
                     renderTrainerPanel(); 
                 }).updateStudentData(s); 
@@ -9778,6 +10032,26 @@
             if (file) { 
                 processFileUpload(file, function(p) { 
                     if (!p) return; 
+                    if (nanbanNativeConfigured_()) {
+                        showLoader("Uploading document…");
+                        nanbanClientUploadLlrFromDataUrl_(p.data, p.name)
+                            .then(function(res) {
+                                hideLoader();
+                                if (res && res.url) {
+                                    processTrainerSave(res.url, res.id, p.type, llrStatus);
+                                } else {
+                                    showToast("⚠️ Upload Failed", "danger");
+                                    processTrainerSave("", "", "", "No");
+                                }
+                            })
+                            .catch(function(err) {
+                                hideLoader();
+                                console.warn("trainer LLR client storage", err);
+                                showToast("⚠️ " + (err && err.message ? err.message : "Upload failed"), "danger");
+                                processTrainerSave("", "", "", "No");
+                            });
+                        return;
+                    }
                     google.script.run.withSuccessHandler(function(res) { 
                         if (res && res.url) { processTrainerSave(res.url, res.id, p.type, llrStatus); } 
                         else { showToast("⚠️ Upload Failed", "danger"); processTrainerSave("", "", "", "No"); } 
@@ -10253,7 +10527,17 @@
             reader.onload = function(e) {
                 var base64Data = e.target.result;
                 var fileName = "Exp_" + getISTDate().replace(/-/g,'').replace(/\//g,'') + "_" + file.name;
-                
+                if (nanbanNativeConfigured_()) {
+                    nanbanClientUploadLlrFromDataUrl_(base64Data, fileName)
+                        .then(function(res) {
+                            resolve(res && res.url ? res.url : "");
+                        })
+                        .catch(function(err) {
+                            console.error("Expense receipt upload:", err);
+                            resolve("");
+                        });
+                    return;
+                }
                 google.script.run
                     .withSuccessHandler(function(res) {
                         if (res && res.url) {
@@ -12849,19 +13133,33 @@
 
     function deleteReferral(index) { if (!confirm("இந்த ரெஃபரலை நீக்க வேண்டுமா?")) return; appSettings.appSettings.referrers.splice(index, 1); google.script.run.saveAppSettings("appSettings", appSettings.appSettings); renderDynamicSettings(); showToast("Deleted"); }
     function saveTrainerAlertNum() { 
-        let btn = event.target;
-        let oldText = btn.innerText;
-        btn.innerText = "Saving...";
-        btn.disabled = true;
+        var btn = (typeof event !== "undefined" && event && event.target) ? event.target : null;
+        var oldText = btn ? btn.innerText : "";
+        if (btn) { btn.innerText = "Saving..."; btn.disabled = true; }
         
         appSettings.appSettings.trainerAlertPhone = getVal('trainerAlertNum'); 
+        appSettings.appSettings.adminPhone = appSettings.appSettings.trainerAlertPhone;
+        function doneOk() {
+            if (btn) { btn.innerText = oldText; btn.disabled = false; }
+            showToast("Admin alert numbers saved! ✅");
+            renderDynamicSettings();
+        }
+        function doneFail(msg) {
+            if (btn) { btn.innerText = oldText; btn.disabled = false; }
+            showToast(msg || "Save failed", "danger");
+        }
+        if (nanbanNativeConfigured_()) {
+            apiCall_("saveAppSettings", "appSettings", appSettings.appSettings)
+                .then(function(r) {
+                    if (r && r.status === "success") doneOk();
+                    else doneFail((r && r.message) || "Save failed");
+                })
+                .catch(function(e) { doneFail(e && e.message ? e.message : String(e)); });
+            return;
+        }
         google.script.run
-            .withSuccessHandler(function() {
-                btn.innerText = oldText;
-                btn.disabled = false;
-                showToast("Trainer Number Saved! ✅");
-                renderDynamicSettings();
-            })
+            .withSuccessHandler(doneOk)
+            .withFailureHandler(function(err) { doneFail(err && err.message ? err.message : String(err)); })
             .saveAppSettings("appSettings", appSettings.appSettings); 
     }
     function saveTestMessageSettings() {
@@ -14575,6 +14873,24 @@
         document.querySelectorAll('#esOpeningModal .es-denom-inp').forEach(function(el) { el.value = ''; });
     }
 
+    function refreshESOpeningModalHeader_() {
+        var el = document.getElementById("esOpeningModalDateLine");
+        if (!el) return;
+        try {
+            var d = new Date();
+            var wd = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", weekday: "long" }).format(d);
+            var ds = new Intl.DateTimeFormat("en-IN", {
+                timeZone: "Asia/Kolkata",
+                day: "numeric",
+                month: "long",
+                year: "numeric"
+            }).format(d);
+            el.textContent = wd + ", " + ds;
+        } catch (e) {
+            el.textContent = getISTDate();
+        }
+    }
+
     function saveESOpeningBalance() {
         let b = {
             Cash: parseInt(getVal('esOpCash')) || 0,
@@ -14583,6 +14899,29 @@
             "Federal 2": parseInt(getVal('esOpFed2')) || 0,
             Paytm: parseInt(getVal('esOpPaytm')) || 0
         };
+        function afterOpeningSaveSuccess_() {
+            showToast("✅ கணக்கு தொடங்கப்பட்டது!", "success");
+            resetESOpeningDenomFields_();
+            closeModal("esOpeningModal");
+            loadESevaiInitialData({ silent: false, activateDash: true, allowOpeningModal: false });
+        }
+        if (nanbanNativeConfigured_() || isBridgeConfigured_()) {
+            showLoader("இன்றைய இருப்புகள் சேவையகத்தில் சேமிக்கப்படுகிறது...");
+            apiCall_("saveESevaiOpeningBalanceAction", b)
+                .then(function(res) {
+                    hideLoader();
+                    if (res && res.status === "success") {
+                        afterOpeningSaveSuccess_();
+                    } else {
+                        showToast("பிழை: " + ((res && res.message) ? res.message : "Opening save failed"), "danger");
+                    }
+                })
+                .catch(function(err) {
+                    hideLoader();
+                    showToast("Sync Failed: " + (err && err.message ? err.message : String(err)), "danger");
+                });
+            return;
+        }
         if (firebaseReady) {
             showLoader("இன்றைய இருப்புகள் Firebase-ல் சேமிக்கப்படுகிறது...");
             (async function() {
@@ -14604,10 +14943,7 @@
                     };
                     await persistESevaiData();
                     hideLoader();
-                    showToast("✅ கணக்கு தொடங்கப்பட்டது!", "success");
-                    resetESOpeningDenomFields_();
-                    closeModal('esOpeningModal');
-                    loadESevaiInitialData();
+                    afterOpeningSaveSuccess_();
                 } catch (e) {
                     hideLoader();
                     showToast("Firebase save failed", "danger");
@@ -14620,9 +14956,7 @@
             .withSuccessHandler(function(res) {
                 hideLoader();
                 if (res && res.status === 'success') {
-                    showToast("✅ கணக்கு தொடங்கப்பட்டது!");
-                    closeModal('esOpeningModal');
-                    loadESevaiInitialData();
+                    afterOpeningSaveSuccess_();
                 } else {
                     let msg = (res && res.message) ? res.message : "Error saving balance";
                     showToast("பிழை: " + msg, "danger");

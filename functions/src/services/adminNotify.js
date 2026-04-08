@@ -1,26 +1,12 @@
 const { enqueueWaOutboundSend } = require("./waOutboundQueue");
-
-const DEFAULT_ADMIN_PHONES = {
-  nanban_main: ["919092036666", "919942391870"]
-};
+const { getResolvedAdminPhonesForTenant, cleanDigits } = require("./adminPhoneResolve");
 
 function cleanPhone(phone) {
-  return String(phone || "").replace(/\D/g, "");
+  return cleanDigits(phone);
 }
 
 async function getTenantAdminPhones(tenantId) {
-  const admin = require("firebase-admin");
-  const tid = String(tenantId || "").trim() || "nanban_main";
-  try {
-    const snap = await admin.firestore().collection("platform_tenants").doc(tid).get();
-    if (snap.exists) {
-      const data = snap.data() || {};
-      if (Array.isArray(data.admin_phones) && data.admin_phones.length) {
-        return data.admin_phones.map(cleanPhone).filter(Boolean);
-      }
-    }
-  } catch (e) {}
-  return (DEFAULT_ADMIN_PHONES[tid] || []).map(cleanPhone).filter(Boolean);
+  return getResolvedAdminPhonesForTenant(tenantId);
 }
 
 async function notifyAdminsText(tenantId, message) {
@@ -39,7 +25,9 @@ async function notifyAdminsText(tenantId, message) {
         },
         { delaySeconds: 0 }
       );
-    } catch (e) {}
+    } catch (e) {
+      console.warn(`ADMIN_NOTIFY_ENQUEUE_FAIL to=${phone} ${String(e && e.message ? e.message : e)}`);
+    }
   }
 }
 
