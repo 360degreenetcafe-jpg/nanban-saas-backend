@@ -135,6 +135,16 @@
         .btn-w { background: var(--warning); color: white; } 
         .btn-c { background: var(--chit-color); color: white; } 
         .btn-abs { background: #64748b; color: white; }
+        /* SaaS white-label schools: hide Nanban-internal chit, odometer/KM tooling, settlement card */
+        body.wl-driving-school-tenant #tabChit,
+        body.wl-driving-school-tenant #dashKmCard,
+        body.wl-driving-school-tenant #trainerKmDayClosePanel,
+        body.wl-driving-school-tenant #settingsVehicleKmCard,
+        body.wl-driving-school-tenant #settingsChitTemplateFields,
+        body.wl-driving-school-tenant #settingsChitWaTestBtn,
+        body.wl-driving-school-tenant #dashChitSettlementCard {
+            display: none !important;
+        }
         
         .btn:disabled { 
             background: #94a3b8 !important; 
@@ -2112,7 +2122,7 @@
     <div style="max-width: 500px; margin: auto; background: white; border-radius: 24px; box-shadow: 0 15px 35px rgba(0,0,0,0.1); overflow: hidden; position: relative;">
         
         <div style="background: var(--primary); color: white; padding: 30px 20px; text-align: center; border-bottom: 5px solid var(--secondary);">
-            <h2 style="margin: 0; font-weight: 900; letter-spacing: 1px;">நண்பன் டிரைவிங் ஸ்கூல்</h2>
+            <h2 id="passportSchoolTitle" style="margin: 0; font-weight: 900; letter-spacing: 1px;">நண்பன் டிரைவிங் ஸ்கூல்</h2>
             <div style="font-size: 12px; color: #cbd5e1; margin-top: 5px;">Digital Student Passport 📱</div>
         </div>
 
@@ -2270,9 +2280,24 @@
         <h2 style="font-weight: 900; color: var(--primary); font-size: 32px; margin-bottom: 5px;">NANBAN <span style="color: var(--secondary);">PRO</span></h2>
         <p style="color: var(--text-muted); font-size: 12px; font-weight: 700; margin-bottom: 30px; letter-spacing: 1px;">SECURE ACCESS</p>
         <div id="saasModeHint" style="display:none; font-size:10px; font-weight:800; color:#7c3aed; background:#f5f3ff; border:1px solid #ddd6fe; border-radius:10px; padding:6px 8px; margin-bottom:10px;">🧪 SaaS staging mode enabled</div>
-        <div style="display:flex; gap:8px; margin-bottom:12px;">
+        <div id="loginAuthModeToggle" style="display:flex; gap:8px; margin-bottom:12px;">
             <button id="btnAuthSaas" class="btn btn-p" style="flex:1; padding:9px; font-size:12px;" onclick="setAuthLoginMode('saas')">🌐 SaaS Login</button>
             <button id="btnAuthLegacy" class="btn" style="flex:1; padding:9px; font-size:12px; background:#f1f5f9; color:#0f172a;" onclick="setAuthLoginMode('legacy')">🔐 PIN Login</button>
+        </div>
+
+        <div id="registrationSection" style="display:none; text-align:left;">
+            <h3 style="margin:0 0 8px; font-size:18px; color:var(--primary);">உங்கள் டிரைவிங் ஸ்கூலைத் தொடங்குங்கள்</h3>
+            <p style="font-size:11px; color:var(--text-muted); margin-bottom:14px; line-height:1.45;"><strong>2 நாள் இலவச டிரையல்.</strong> OTP உங்கள் WhatsApp-க்கு அனுப்பப்படும் — குறியீட்டை உறுதிப்படுத்திய பிறகே பதிவு முடியும்.</p>
+            <label style="font-size:11px; font-weight:700;">ஸ்கூல் பெயர்</label>
+            <input type="text" id="regSchoolName" autocomplete="organization" placeholder="எ.கா: சிட்டி டிரைவிங் ஸ்கூல்" style="width:100%; box-sizing:border-box; margin-bottom:10px; padding:10px; border-radius:8px; border:2px solid #e2e8f0;">
+            <label style="font-size:11px; font-weight:700;">அட்மின் மொபைல் (WhatsApp உள்ள எண்)</label>
+            <input type="tel" id="regAdminPhone" inputmode="numeric" autocomplete="tel" placeholder="10 இலக்க மொபைல்" maxlength="16" style="width:100%; box-sizing:border-box; margin-bottom:8px; padding:10px; border-radius:8px; border:2px solid #e2e8f0;">
+            <button type="button" class="btn" style="width:100%; margin-bottom:12px; padding:10px; background:#eff6ff; border:1px solid #bfdbfe; color:#1e40af;" onclick="sendSchoolRegistrationOtp_()">📲 OTP அனுப்பு (WhatsApp)</button>
+            <label style="font-size:11px; font-weight:700;">6 இலக்க OTP</label>
+            <input type="text" id="regOtp" inputmode="numeric" autocomplete="one-time-code" placeholder="------" maxlength="8" style="width:100%; box-sizing:border-box; margin-bottom:14px; padding:10px; border-radius:8px; border:2px solid #e2e8f0; letter-spacing:6px; font-weight:900;">
+            <button type="button" class="btn btn-p" style="width:100%; margin-bottom:8px; padding:12px;" onclick="submitNewSchoolRegistration_()">OTP உறுதிப்படுத்தி டிரையல் தொடங்கு</button>
+            <button type="button" class="btn" style="width:100%; background:#f8fafc; font-size:12px; padding:10px; border:1px solid #e2e8f0;" onclick="cancelNewSchoolRegistration_()">← Use a different Google account</button>
+            <div id="regStatus" style="font-size:11px; margin-top:12px; font-weight:700; color:var(--text-muted);"></div>
         </div>
 
         <div id="saasAuthPanel">
@@ -2296,6 +2321,10 @@
         </div>
 
         <div id="legacyAuthPanel" style="display:none;">
+            <div id="legacyGoogleLoginRow" style="display:none; margin-bottom:14px;">
+                <button type="button" class="btn" style="width:100%; background:#ffffff; color:#111827; border:1px solid #dbeafe;" onclick="startGoogleSsoLogin()">🔐 Continue with Google</button>
+                <p style="font-size:10px; color:var(--text-muted); margin:6px 0 0;">Existing staff: Gmail must be in <code>users</code>. New schools: sign in, then complete the short setup form.</p>
+            </div>
             <label style="text-align:left; font-size:11px;">உங்கள் பெயர்</label>
             <select id="loginNameDrop" disabled style="font-size: 16px; font-weight: 700; background: #f8fafc; border: 2px solid #e2e8f0; margin-top: 5px; margin-bottom: 20px;">
                 <option value="">Loading users...</option>
@@ -2394,7 +2423,7 @@
         <h2 style="margin:0 0 15px 0; color:var(--primary); text-align:center; font-weight:900;">🧾 கணக்கு முடிப்பு</h2>
         
         <div class="receipt-card">
-            <div style="text-align:center; margin-bottom:15px; color:var(--text-muted); font-size:12px;">நண்பன் டிரைவிங் ஸ்கூல்</div>
+            <div id="tdcSchoolBrand" style="text-align:center; margin-bottom:15px; color:var(--text-muted); font-size:12px;">நண்பன் டிரைவிங் ஸ்கூல்</div>
             <div class="receipt-row"><span>தேதி:</span> <span id="tdcDateDisplay">--</span></div>
             <div class="receipt-row"><span>பயிற்சியாளர்:</span> <span id="tdcTrainerName">--</span></div>
             <hr style="border:1px dashed #cbd5e1; margin:10px 0;">
@@ -3270,7 +3299,7 @@
                     <div class="stat-row"><span class="stat-label">இந்த மாதம்:</span><span class="stat-val" id="dashExpMonth">₹0</span></div>
                 </div>
                 
-                <div class="metric-card" style="border-left-color: var(--warning);">
+                <div class="metric-card" id="dashKmCard" style="border-left-color: var(--warning);">
                     <h3>🚗 வண்டி ஓடியது (KM)</h3>
                     <div class="stat-row"><span class="stat-label">இன்று ஓடியது:</span><span class="stat-val today" id="dashKmToday" style="cursor:pointer;" onclick="openDashboardPopup('km_trained')">0 KM</span></div>
                     <div class="stat-row"><span class="stat-label">பயிற்சி பெற்றவர்கள்:</span><span class="stat-val" id="dashTrainerClassCount" style="color:var(--secondary); cursor:pointer;" onclick="openDashboardPopup('km_trained')">0</span></div>
@@ -3910,7 +3939,7 @@
         </div>
 
         <div id="masterSection" class="section-content hidden">
-            <div class="glass-card trainer-km-panel" style="padding:25px; margin-bottom:30px; background:linear-gradient(to right, #f0fdf4, #ffffff); border:2px solid #bbf7d0;">
+            <div id="trainerKmDayClosePanel" class="glass-card trainer-km-panel" style="padding:25px; margin-bottom:30px; background:linear-gradient(to right, #f0fdf4, #ffffff); border:2px solid #bbf7d0;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
                     <h3 style="margin:0; color:var(--success); font-weight:900;">🚗 இன்றைய பயிற்சி</h3>
                     <div style="display:flex; gap:10px;">
@@ -4255,7 +4284,8 @@
             
             <div class="glass-card" style="padding:40px; border-top: 8px solid var(--primary);">
                 <div style="text-align:center; margin-bottom:30px; border-bottom:2px dashed #eee; padding-bottom:20px;">
-                    <h1 style="margin:0; color:var(--primary);">நண்பன் டிரைவிங் ஸ்கூல்</h1>
+                    <h1 id="repSchoolTitle" style="margin:0; color:var(--primary);">நண்பன் டிரைவிங் ஸ்கூல்</h1>
+                    <div id="repSchoolSub" style="margin:8px 0 0 0; color:var(--text-muted); font-weight:700; font-size:13px; white-space:pre-wrap;"></div>
                     <p style="margin:5px 0 0 0; color:var(--text-muted); font-weight:700;">நிதி அறிக்கை - <span id="reportDate"></span></p>
                 </div>
                 
@@ -4414,7 +4444,9 @@
                         <button type="button" class="btn btn-p" style="padding:12px; font-size:12px;" onclick="sendWaTemplateTestKind_('fee_4w')">4W fee</button>
                         <button type="button" class="btn btn-p" style="padding:12px; font-size:12px;" onclick="sendWaTemplateTestKind_('llr_reminder')">LLR / RTO reminder</button>
                         <button type="button" class="btn btn-p" style="padding:12px; font-size:12px;" onclick="sendWaTemplateTestKind_('quiz_sample')">Quiz sample</button>
+                        <div id="settingsChitWaTestBtn" style="display:inline;">
                         <button type="button" class="btn btn-p" style="padding:12px; font-size:12px;" onclick="sendWaTemplateTestKind_('chit_alert')">Chit alert</button>
+                        </div>
                         <button type="button" class="btn btn-p" style="padding:12px; font-size:12px;" onclick="sendWaTemplateTestKind_('day_close')">Day close</button>
                     </div>
                 </div>
@@ -4428,9 +4460,12 @@
                     <input type="text" id="setTemplateRtoReminder" placeholder="RTO reminder" style="margin:6px 0;">
                     <input type="text" id="setTemplateRtoTomorrow" placeholder="RTO tomorrow" style="margin:6px 0;">
                     <input type="text" id="setTemplateDailyClass" placeholder="Daily class" style="margin:6px 0;">
+                    <div id="settingsChitTemplateFields" style="margin:10px 0; padding:12px; border-radius:10px; border:1px dashed #c4b5fd; background:#faf5ff;">
+                        <div style="font-size:10px; font-weight:900; color:#6d28d9; margin-bottom:8px;">🤝 சீட் டெம்ப்ளேட் பெயர்கள் (உள் பயன் மட்டும்)</div>
                     <input type="text" id="setTemplateChitAuction" placeholder="Chit auction" style="margin:6px 0;">
                     <input type="text" id="setTemplateChitDue" placeholder="Chit due" style="margin:6px 0;">
                     <input type="text" id="setTemplateChitReceipt" placeholder="Chit receipt" style="margin:6px 0;">
+                    </div>
                     <input type="text" id="setTemplateBulk" placeholder="Bulk" style="margin:6px 0;">
                     <input type="text" id="setInspectorTime" placeholder="Inspector time" style="margin:6px 0;">
                     <input type="text" id="setBusinessUpi" placeholder="UPI ID" style="margin:6px 0;">
@@ -4442,7 +4477,7 @@
                     <button class="btn btn-s" style="width:100%; font-size:12px; padding:12px; margin-top:12px;" onclick="saveTestMessageSettings()">💾 Save template settings</button>
                 </div>
 
-                <div class="glass-card" style="padding:25px; margin-bottom:20px; background:linear-gradient(to right, #eff6ff, #ffffff); border-left:8px solid var(--secondary);">
+                <div id="settingsVehicleKmCard" class="glass-card" style="padding:25px; margin-bottom:20px; background:linear-gradient(to right, #eff6ff, #ffffff); border-left:8px solid var(--secondary);">
                     <h3 style="margin-top:0; color:var(--primary); font-size:15px;">🚗 Vehicle KM &amp; trainer</h3>
                     <div class="flex-row" style="align-items:flex-end; flex-wrap:wrap; gap:10px;">
                         <div>
@@ -4463,6 +4498,27 @@
                             <button class="btn btn-p" style="padding:10px 20px;" onclick="saveTrainerAlertNum()">Save</button>
                         </div>
                     </div>
+                </div>
+
+                <div class="glass-card" style="padding:25px; margin-bottom:20px; background:linear-gradient(to right, #ecfdf5, #ffffff); border-left:8px solid #059669;">
+                    <h3 style="margin-top:0; color:var(--primary); font-size:15px;">🏫 Driving School Profile — நிறுவனத்தின் விவரங்கள்</h3>
+                    <p style="font-size:11px; color:var(--text-muted); margin:0 0 12px;">பிரிண்ட் ரசீது, அறிக்கை தலைப்பு, மற்றும் WhatsApp ரசீது footer-க்கு பயன்படும் (தொழில் ஒன்றுக்கு ஒன்று).</p>
+                    <label style="font-size:11px; font-weight:800;">நிறுவனத்தின் பெயர் (School name)</label>
+                    <input type="text" id="dsProfileSchoolName" placeholder="எ.கா: நண்பன் டிரைவிங் ஸ்கூல்" style="width:100%; margin:4px 0 10px; box-sizing:border-box;">
+                    <label style="font-size:11px; font-weight:800;">முழு முகவரி (Full address)</label>
+                    <textarea id="dsProfileSchoolAddress" rows="2" placeholder="முழு முகவரி..." style="width:100%; margin:4px 0 10px; box-sizing:border-box;"></textarea>
+                    <label style="font-size:11px; font-weight:800;">தொடர்பு எண் (Contact phone)</label>
+                    <input type="text" id="dsProfileContactPhone" placeholder="எ.கா: 9876543210" style="width:100%; margin:4px 0 10px; box-sizing:border-box;">
+                    <label style="font-size:11px; font-weight:800;">பில் வாசகம் / Terms (Receipt footer)</label>
+                    <textarea id="dsProfileReceiptFooter" rows="3" placeholder="எ.கா: நன்றி! பணம் திரும்ப அளிக்கப்படாது..." style="width:100%; margin:4px 0 12px; box-sizing:border-box;"></textarea>
+                    <button type="button" class="btn btn-p" style="width:100%; padding:12px; font-size:13px;" onclick="saveDrivingSchoolProfile_()">💾 சுயவிவரத்தைச் சேமி (Save profile)</button>
+                </div>
+
+                <div id="platformSaasSchoolsCard" class="glass-card" style="display:none; padding:20px; margin-bottom:20px; border:1px solid #c7d2fe; background:linear-gradient(135deg, #eef2ff 0%, #ffffff 100%);">
+                    <h3 style="margin-top:0; color:#3730a3; font-size:15px;">🏫 SaaS டிரைவிங் ஸ்கூல்கள் — லாகின் பதிவு</h3>
+                    <p style="font-size:11px; color:var(--text-muted); margin:0 0 10px;">முதன்மை டெனன்ட் (<code>nanban_main</code>) அட்மின் மட்டும். பிற ஸ்கூல்கள் Google/PIN லாகின் செய்தபோது புதுப்பிக்கப்படும்.</p>
+                    <button type="button" class="btn btn-p" style="padding:10px 16px; font-size:12px; margin-bottom:12px;" onclick="refreshSaaSSchoolActivity_()">🔄 பட்டியலைப் புதுப்பி</button>
+                    <div id="saasSchoolActivityBody" style="font-size:11px; max-height:280px; overflow:auto; border:1px solid #e2e8f0; border-radius:10px; padding:10px; background:#fafafa;"></div>
                 </div>
 
                 <div class="glass-card" style="padding:15px; margin-bottom:20px; border:1px solid #cbd5e1;">
@@ -4638,6 +4694,19 @@
         if (!appSettings.vehicleKm || typeof appSettings.vehicleKm !== 'object') {
             appSettings.vehicleKm = { current: 0, lastService: 0, nextService: 5000 };
         }
+    }
+
+    /** Tenant-scoped driving school branding for receipts, reports, and passport (snapshot appSettings.appSettings). */
+    function getDrivingSchoolProfile_() {
+        ensureNanbanAppSettingsShape_();
+        var inner = appSettings.appSettings || {};
+        var defName = "நண்பன் டிரைவிங் ஸ்கூல்";
+        return {
+            schoolName: String(inner.schoolName || "").trim() || defName,
+            schoolAddress: String(inner.schoolAddress || "").trim(),
+            contactPhone: String(inner.contactPhone || "").trim(),
+            receiptFooter: String(inner.receiptFooter || "").trim()
+        };
     }
 
     function ensureNanbanClientState_() {
@@ -4866,6 +4935,8 @@
     let firebaseAuth = null;
     let ENABLE_SAAS_EXPERIMENT = false; // Production freeze default; staging only.
     const FORCE_LOCAL_STABLE_LOGIN = true; // No bridge dependency for production login.
+    /** Google sign-in on hosted app; access only if Firestore `users` doc includes matching `email`. */
+    const ENABLE_HOSTED_GOOGLE_LOGIN = true;
     /** Nanban HTTPS backend (snapshot + /v1/rpc + WA jobs). Auth is fixed; no user configuration. */
     const NANBAN_NATIVE_API_URL = "https://asia-south1-nanban-driving-school-d7b20.cloudfunctions.net/nanbanWebIntegration";
     const NANBAN_NATIVE_WRITE_KEY = "nanban@2026";
@@ -5037,6 +5108,11 @@
         if (rb) rb.style.display = 'none';
         if (cb) cb.style.display = 'none';
         if (eb) eb.style.display = 'none';
+        var lg = document.getElementById("legacyGoogleLoginRow");
+        if (lg && ENABLE_HOSTED_GOOGLE_LOGIN && nanbanNativeConfigured_()) {
+            lg.style.display = "block";
+            try { initSaasAuth(); } catch (e) {}
+        }
         setLoginLoading(false, "Stable login mode");
         setLoginStatus_("✅ Stable local PIN login active. பெயர் + PIN உள்ளிட்டு login செய்யவும்.", "var(--success)");
     }
@@ -5276,6 +5352,18 @@
     function tryAutoSelectUserFromGoogle_() {
         if (!saasContext.isGoogleSignedIn || !Array.isArray(APP_USERS) || !APP_USERS.length) return;
         let mail = String(saasContext.email || "").trim().toLowerCase();
+        if (mail) {
+            let byEmail = APP_USERS.find(function(u) {
+                return String((u && u.email) || "").trim().toLowerCase() === mail;
+            });
+            if (byEmail) {
+                setVal("loginNameDrop", byEmail.name);
+                setLoginStatus_("✅ Google verified. PIN உள்ளிட்டு continue செய்யவும்.", "var(--success)");
+                let p = document.getElementById("loginPin");
+                if (p) p.focus();
+                return;
+            }
+        }
         let name = String(saasContext.displayName || "").trim().toLowerCase();
         let local = mail.indexOf("@") > 0 ? mail.split("@")[0] : "";
         let hit = APP_USERS.find(function(u) {
@@ -5289,10 +5377,351 @@
         if (p) p.focus();
     }
 
+    function isWhiteLabelDrivingSchoolTenant_() {
+        var t = String(
+            (saasContext && saasContext.tenantId) || localStorage.getItem(TENANT_CODE_KEY) || ""
+        )
+            .trim()
+            .toLowerCase();
+        return t.indexOf("ds-") === 0;
+    }
+
+    function applyWhiteLabelTenantUi_() {
+        try {
+            document.body.classList.toggle("wl-driving-school-tenant", isWhiteLabelDrivingSchoolTenant_());
+        } catch (e) {}
+    }
+
+    function applyPlatformOwnerWidgets_() {
+        var pc = document.getElementById("platformSaasSchoolsCard");
+        if (!pc) return;
+        var t = String(
+            (saasContext && saasContext.tenantId) || localStorage.getItem(TENANT_CODE_KEY) || ""
+        )
+            .trim()
+            .toLowerCase();
+        var show =
+            !isWhiteLabelDrivingSchoolTenant_() && t === "nanban_main" && currentUserRole === "Admin";
+        pc.style.display = show ? "block" : "none";
+    }
+
+    async function refreshSaaSSchoolActivity_() {
+        var el = document.getElementById("saasSchoolActivityBody");
+        if (el) el.innerHTML = "⏳ ஏற்றுகிறது…";
+        try {
+            var r = await apiCall_("listSaaSDrivingSchoolActivity");
+            if (!r || r.status !== "success" || !Array.isArray(r.schools)) {
+                var msg = (r && r.message) ? String(r.message) : "Load failed";
+                if (el) el.textContent = msg;
+                showToast(msg, "warning");
+                return;
+            }
+            if (r.schools.length === 0) {
+                if (el) el.innerHTML = "<div style='color:#64748b;font-weight:700;'>இன்னும் SaaS ஸ்கூல் பதிவுகள் இல்லை.</div>";
+                return;
+            }
+            var rows =
+                "<table style='width:100%;border-collapse:collapse;font-size:11px;'><tr style='background:#e0e7ff;font-weight:900;'><td style='padding:6px;border:1px solid #e2e8f0;'>ஸ்கூல்</td><td style='padding:6px;border:1px solid #e2e8f0;'>Tenant</td><td style='padding:6px;border:1px solid #e2e8f0;'>கடைசி லாகின்</td><td style='padding:6px;border:1px solid #e2e8f0;'>மெயில்</td></tr>";
+            for (var i = 0; i < r.schools.length; i++) {
+                var s = r.schools[i];
+                var when = "—";
+                if (s.last_session_at) {
+                    try {
+                        when = new Date(s.last_session_at).toLocaleString();
+                    } catch (e) {
+                        when = String(s.last_session_at);
+                    }
+                }
+                var mail = String(s.last_session_email || s.owner_email || "").trim();
+                var via = String(s.last_session_via || "").trim();
+                if (via) when += " <span style='color:#64748b'>(" + via + ")</span>";
+                rows +=
+                    "<tr><td style='padding:6px;border:1px solid #e2e8f0;'>" +
+                    escapeHtml_(String(s.school_name || "—")) +
+                    "</td><td style='padding:6px;border:1px solid #e2e8f0;font-size:10px;word-break:break-all;'>" +
+                    escapeHtml_(String(s.tenant_id || "")) +
+                    "</td><td style='padding:6px;border:1px solid #e2e8f0;'>" +
+                    when +
+                    "</td><td style='padding:6px;border:1px solid #e2e8f0;word-break:break-all;'>" +
+                    escapeHtml_(mail) +
+                    "</td></tr>";
+            }
+            rows += "</table>";
+            if (el) el.innerHTML = rows;
+        } catch (err) {
+            if (el) el.textContent = err && err.message ? err.message : String(err);
+            showToast("பட்டியல் தோல்வி", "danger");
+        }
+    }
+
+    function escapeHtml_(s) {
+        return String(s || "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+    }
+
+    function formatDrivingSchoolFooterHtml_(text) {
+        return escapeHtml_(text || "").replace(/\n/g, "<br>");
+    }
+
+    async function sendSchoolRegistrationOtp_() {
+        var phone = String(getVal("regAdminPhone") || "").trim();
+        var st = document.getElementById("regStatus");
+        if (st) st.textContent = "";
+        var digits = phone.replace(/\D/g, "");
+        if (digits.length > 10) digits = digits.slice(-10);
+        if (digits.length !== 10) {
+            if (st) st.textContent = "முதலில் 10 இலக்க மொபைல் எண்ணைப் போடுங்கள்.";
+            showToast("மொபைல் எண் தேவை", "warning");
+            return;
+        }
+        if (!firebaseAuth || !firebaseAuth.currentUser) {
+            showToast("Google session இல்லை — மீண்டும் sign in செய்யவும்", "danger");
+            return;
+        }
+        showLoader("OTP அனுப்புகிறது…");
+        try {
+            var token = await firebaseAuth.currentUser.getIdToken(true);
+            var res = await nanbanNativeRpcCall_("sendSchoolRegistrationOtp", [token, digits]);
+            hideLoader();
+            if (!res || res.status !== "success") {
+                var msg = (res && res.message) ? String(res.message) : "OTP அனுப்ப முடியவில்லை";
+                if (st) st.textContent = msg;
+                showToast(msg, "danger");
+                return;
+            }
+            if (st) st.textContent = "✅ OTP உங்கள் WhatsApp-க்கு அனுப்பப்பட்டது (10 நிமிட செல்லுபடி).";
+            showToast("OTP sent", "success");
+            var op = document.getElementById("regOtp");
+            if (op) op.focus();
+        } catch (err) {
+            hideLoader();
+            var msg = err && err.message ? err.message : String(err);
+            if (st) st.textContent = msg;
+            showToast("OTP error", "danger");
+        }
+    }
+
+    function showNewSchoolRegistrationUI_() {
+        var rs = document.getElementById("registrationSection");
+        if (rs) rs.style.display = "block";
+        var p1 = document.getElementById("saasAuthPanel");
+        var p2 = document.getElementById("legacyAuthPanel");
+        var bar = document.getElementById("loginAuthModeToggle");
+        if (p1) p1.style.display = "none";
+        if (p2) p2.style.display = "none";
+        if (bar) bar.style.display = "none";
+        var st = document.getElementById("regStatus");
+        if (st) st.textContent = "";
+        setVal("regOtp", "");
+    }
+
+    function hideNewSchoolRegistrationUI_() {
+        var rs = document.getElementById("registrationSection");
+        if (rs) rs.style.display = "none";
+        var bar = document.getElementById("loginAuthModeToggle");
+        if (bar) bar.style.display = "flex";
+        setAuthLoginMode(authLoginMode);
+    }
+
+    async function cancelNewSchoolRegistration_() {
+        hideNewSchoolRegistrationUI_();
+        try {
+            await firebaseAuth.signOut();
+        } catch (e) {}
+        setLoginStatus_("Signed out. Choose Google again or PIN login.", "var(--text-muted)");
+    }
+
+    async function submitNewSchoolRegistration_() {
+        var school = String(getVal("regSchoolName") || "").trim();
+        var phone = String(getVal("regAdminPhone") || "").trim();
+        var st = document.getElementById("regStatus");
+        if (st) st.textContent = "";
+        if (!school || school.length < 2) {
+            if (st) st.textContent = "Please enter your driving school name.";
+            showToast("School name required", "warning");
+            return;
+        }
+        var digits = phone.replace(/\D/g, "");
+        if (digits.length > 10) digits = digits.slice(-10);
+        if (digits.length !== 10) {
+            if (st) st.textContent = "Enter a valid 10-digit mobile number.";
+            showToast("Valid mobile required", "warning");
+            return;
+        }
+        if (!firebaseAuth || !firebaseAuth.currentUser) {
+            showToast("Google session expired — sign in again", "danger");
+            return;
+        }
+        var otp = String(getVal("regOtp") || "")
+            .trim()
+            .replace(/\D/g, "");
+        if (otp.length !== 6) {
+            if (st) st.textContent = "6 இலக்க OTP-ஐ உள்ளிட்டு முயற்சிக்கவும். இல்லையெனில் OTP அனுப்பு பட்டனை அழுத்தவும்.";
+            showToast("OTP தேவை", "warning");
+            return;
+        }
+        showLoader("Creating your workspace…");
+        try {
+            var token = await firebaseAuth.currentUser.getIdToken(true);
+            var res = await nanbanNativeRpcCall_("registerNewDrivingSchool", [token, school, digits, otp]);
+            if (!res || res.status !== "success") {
+                hideLoader();
+                var msg = (res && res.message) ? String(res.message) : "Registration failed";
+                if (st) st.textContent = msg;
+                showToast(msg, "danger");
+                return;
+            }
+            var tid = String(res.tenant_id || "").trim();
+            if (tid) {
+                saasContext.tenantId = tid;
+                localStorage.setItem(TENANT_CODE_KEY, tid);
+            }
+            var users = await apiCall_("getAppUsers");
+            if (!Array.isArray(users)) users = [];
+            APP_USERS = users;
+            try {
+                localStorage.setItem("nanban_users_cache", JSON.stringify(APP_USERS));
+            } catch (e) {}
+            var prof = res.profile && typeof res.profile === "object" ? res.profile : {};
+            var hit = Object.assign({}, prof, {
+                email: String(firebaseAuth.currentUser.email || prof.email || "").trim().toLowerCase()
+            });
+            hideLoader();
+            hideNewSchoolRegistrationUI_();
+            await applyHostedGoogleSessionAndOpen_(hit, firebaseAuth.currentUser);
+            if (res.trial_ends_at) {
+                try {
+                    showToast("Trial active until " + new Date(res.trial_ends_at).toLocaleString(), "success");
+                } catch (e) {}
+            }
+        } catch (err) {
+            hideLoader();
+            var msg = err && err.message ? err.message : String(err);
+            if (st) st.textContent = msg;
+            showToast("Registration failed", "danger");
+        }
+    }
+
+    async function applyHostedGoogleSessionAndOpen_(hit, firebaseUser) {
+        var em = String((hit && hit.email) || (firebaseUser && firebaseUser.email) || "")
+            .trim()
+            .toLowerCase();
+        APP_USERS = Array.isArray(APP_USERS) ? APP_USERS : [];
+        try {
+            localStorage.setItem("nanban_users_cache", JSON.stringify(APP_USERS));
+        } catch (e) {}
+        var rawTenantStr = String(
+            (hit && (hit.tenant_id || hit.tenantId)) ||
+                saasContext.tenantId ||
+                localStorage.getItem(TENANT_CODE_KEY) ||
+                "nanban_main"
+        ).trim();
+        var resolvedTenant =
+            rawTenantStr.toLowerCase() === "esevai"
+                ? "ESevai"
+                : normalizeTenantCode_(rawTenantStr) || "nanban_main";
+        if (resolvedTenant) {
+            saasContext.tenantId = resolvedTenant;
+            localStorage.setItem(TENANT_CODE_KEY, resolvedTenant);
+        }
+        currentUserRole = (hit && hit.role) || "Admin";
+        currentUserName = (hit && hit.name) || (firebaseUser && firebaseUser.displayName) || em;
+        currentUserPhone = (hit && hit.phone) || "";
+        if (hit && Array.isArray(hit.businesses) && hit.businesses.length) {
+            currentUserBusinesses = hit.businesses.slice();
+        } else {
+            currentUserBusinesses = currentUserRole === "Admin" ? ["Nanban", "ESevai"] : ["Nanban"];
+        }
+        if (currentUserRole === "Partner") {
+            currentUserBusinesses = ["Nanban"];
+        }
+        activeBusiness = userCanAccessBusiness("Nanban") ? "Nanban" : "ESevai";
+        saasContext.isGoogleSignedIn = true;
+        saasContext.email = em;
+        saasContext.displayName = String((firebaseUser && firebaseUser.displayName) || "").trim();
+        try {
+            localStorage.setItem("saas_ctx_v1", JSON.stringify(saasContext));
+        } catch (e) {}
+        setDisplay("loginScreen", "none");
+        setDisplay("mainApp", "block");
+        showToast("Welcome " + currentUserName + "!", "success");
+        var syncBadge = document.getElementById("syncStatus");
+        if (syncBadge) {
+            syncBadge.innerHTML = "🟢 " + currentUserName;
+            syncBadge.style.display = "block";
+        }
+        try {
+            applyRoleRestrictions();
+            renderDynamicSettings();
+            if (currentUserRole === "Trainer") switchTab("master");
+            else if (currentUserRole === "Staff") switchTab("new");
+            else switchTab("dash");
+            loadDatabase();
+            if (userCanAccessBusiness("ESevai")) {
+                setTimeout(function() {
+                    try {
+                        loadESevaiInitialData({ silent: true, activateDash: false, allowOpeningModal: false });
+                    } catch (e) {}
+                }, 20);
+            }
+            try {
+                if (isWhiteLabelDrivingSchoolTenant_() && firebaseAuth && firebaseUser && firebaseUser.getIdToken) {
+                    firebaseUser.getIdToken(true).then(function(t) {
+                        return nanbanNativeRpcCall_("recordTenantSession", [t]);
+                    }).catch(function() {});
+                }
+            } catch (e2) {}
+        } catch (e) {
+            loadDatabase();
+        }
+    }
+
+    async function verifyFirestoreUserAndOpenApp_(firebaseUser) {
+        if (!firebaseUser || !firebaseUser.email) {
+            showToast("Google account email missing", "danger");
+            return;
+        }
+        if (!nanbanNativeConfigured_()) {
+            showToast("Google login requires hosted API (nanbanWebIntegration)", "danger");
+            return;
+        }
+        showLoader("Access verify…");
+        try {
+            var users = await apiCall_("getAppUsers");
+            if (!Array.isArray(users)) users = [];
+            var em = String(firebaseUser.email || "").trim().toLowerCase();
+            var hit = users.find(function(u) {
+                return String((u && u.email) || "").trim().toLowerCase() === em;
+            });
+            if (!hit) {
+                hideLoader();
+                setLoginStatus_("New school — enter your details below to start your free trial.", "var(--success)");
+                showNewSchoolRegistrationUI_();
+                return;
+            }
+            APP_USERS = users;
+            hideLoader();
+            await applyHostedGoogleSessionAndOpen_(hit, firebaseUser);
+        } catch (err) {
+            hideLoader();
+            try {
+                await firebaseAuth.signOut();
+            } catch (e2) {}
+            var msg = err && err.message ? err.message : String(err);
+            setLoginStatus_("❌ User list verify failed: " + msg, "var(--danger)");
+            showToast("Verify failed", "danger");
+        }
+    }
+
     async function startGoogleSsoLogin() {
-        if (!ENABLE_SAAS_EXPERIMENT) { showToast("Google SaaS login staging-ல் உள்ளது. PIN login use செய்யவும்.", "warning"); return; }
+        if (!ENABLE_SAAS_EXPERIMENT && !ENABLE_HOSTED_GOOGLE_LOGIN) {
+            showToast("Google login disabled. PIN login use செய்யவும்.", "warning");
+            return;
+        }
         if (!firebaseAuth) {
-            // Retry init once (some browsers/extensions delay Firebase script readiness).
             try { initSaasAuth(); } catch (e) {}
         }
         if (!firebaseAuth) {
@@ -5301,24 +5730,38 @@
             return;
         }
         if (!ensureHttpsForSaas_()) return;
-        let btn = document.getElementById('googleLoginBtn');
+        var btn = document.getElementById("googleLoginBtn");
+        var row = document.getElementById("legacyGoogleLoginRow");
         if (btn) btn.disabled = true;
-        setLoginStatus_("⏳ Google login தொடங்குகிறது...", "var(--warning)");
+        if (row) {
+            var b2 = row.querySelector("button");
+            if (b2) b2.disabled = true;
+        }
+        setLoginStatus_("⏳ Google login…", "var(--warning)");
         try {
-            let provider = new firebase.auth.GoogleAuthProvider();
-            provider.setCustomParameters({ prompt: 'select_account' });
-            // Use redirect-only flow for reliability (avoids popup handler issues).
-            setLoginStatus_("🔄 Redirect login நடக்கிறது... Google account தேர்வு செய்யவும்.", "var(--warning)");
+            var provider = new firebase.auth.GoogleAuthProvider();
+            provider.setCustomParameters({ prompt: "select_account" });
+            if (ENABLE_HOSTED_GOOGLE_LOGIN && nanbanNativeConfigured_()) {
+                var cred = await firebaseAuth.signInWithPopup(provider);
+                if (cred && cred.user) {
+                    await verifyFirestoreUserAndOpenApp_(cred.user);
+                }
+                return;
+            }
+            setLoginStatus_("🔄 Redirect login நடக்கிறது...", "var(--warning)");
             await firebaseAuth.signInWithRedirect(provider);
-            return;
         } catch (e) {
-            let code = String((e && e.code) || '');
-            let raw = String((e && e.message) || e || '');
-            let mapped = mapAuthErrorToTamil_(code, raw);
+            var code = String((e && e.code) || "");
+            var raw = String((e && e.message) || e || "");
+            var mapped = mapAuthErrorToTamil_(code, raw);
             setLoginStatus_("❌ Google login failed: " + mapped + (code ? " [" + code + "]" : ""), "var(--danger)");
             showToast("Google login failed", "danger");
         } finally {
             if (btn) btn.disabled = false;
+            if (row) {
+                var b3 = row.querySelector("button");
+                if (b3) b3.disabled = false;
+            }
         }
     }
 
@@ -5347,6 +5790,10 @@
             try {
                 firebaseAuth.getRedirectResult().then(function(r) {
                     if (r && r.user) {
+                        if (ENABLE_HOSTED_GOOGLE_LOGIN && nanbanNativeConfigured_()) {
+                            verifyFirestoreUserAndOpenApp_(r.user);
+                            return;
+                        }
                         saasContext.isGoogleSignedIn = true;
                         saasContext.email = String(r.user.email || "").trim();
                         saasContext.displayName = String(r.user.displayName || "").trim();
@@ -5993,6 +6440,17 @@
     function nanbanNativeConfigured_() {
         return true;
     }
+    /** Firestore businesses/{doc}/snapshot/main for driving-school ERP (matches backend nanbanBusinessDocIdForTenant). */
+    function nanbanSnapshotBusinessId_() {
+        var t = String(
+            (saasContext && saasContext.tenantId) ||
+                localStorage.getItem(TENANT_CODE_KEY) ||
+                "nanban_main"
+        ).trim();
+        if (!t || t === "nanban_main") return "Nanban";
+        if (/^esevai$/i.test(t)) return "Nanban";
+        return t;
+    }
     /** Firestore/API may return arrays or map-shaped JSON; never drop rows on the client. */
     function nanbanCoerceJsonArray_(v) {
         if (Array.isArray(v)) return v;
@@ -6020,7 +6478,8 @@
 
     async function nanbanFetchSnapshot_() {
         if (!nanbanNativeConfigured_()) return null;
-        var url = getNanbanNativeApiBase_() + "/v1/snapshot?business=Nanban&key=" + encodeURIComponent(getNanbanWebWriteKey_()) + "&_ts=" + Date.now();
+        var bid = encodeURIComponent(nanbanSnapshotBusinessId_());
+        var url = getNanbanNativeApiBase_() + "/v1/snapshot?business=" + bid + "&key=" + encodeURIComponent(getNanbanWebWriteKey_()) + "&_ts=" + Date.now();
         var r = await fetch(url, { cache: 'no-store' });
         if (!r.ok) return null;
         return r.json();
@@ -6029,7 +6488,7 @@
         if (!nanbanNativeConfigured_()) return false;
         let url = getNanbanNativeApiBase_() + "/v1/snapshot";
         let body = {
-            business: "Nanban",
+            business: nanbanSnapshotBusinessId_(),
             students: studentsData,
             expenses: expensesData,
             appSettings: appSettings || {},
@@ -6037,7 +6496,9 @@
         };
         if (waAdmissionStudentOpt && typeof waAdmissionStudentOpt === 'object') {
             body.waAdmissionStudent = waAdmissionStudentOpt;
-            body.tenantId = "nanban_main";
+            body.tenantId =
+                String((saasContext && saasContext.tenantId) || localStorage.getItem(TENANT_CODE_KEY) || "nanban_main").trim() ||
+                "nanban_main";
         }
         let r = await fetch(url, {
             method: "POST",
@@ -6058,7 +6519,12 @@
                 "Content-Type": "application/json",
                 "x-nanban-write-key": getNanbanWebWriteKey_()
             },
-            body: JSON.stringify({ tenantId: "nanban_main", student: student })
+            body: JSON.stringify({
+                tenantId:
+                    String((saasContext && saasContext.tenantId) || localStorage.getItem(TENANT_CODE_KEY) || "nanban_main").trim() ||
+                    "nanban_main",
+                student: student
+            })
         });
     }
     async function nanbanAfterAdmissionSave_(student, opts) {
@@ -6402,6 +6868,8 @@
             setDisplay('mainApp', 'none');
 
             if (!s || typeof s !== 'object') {
+                var p0 = getDrivingSchoolProfile_();
+                setHTML('passportSchoolTitle', escapeHtml_(p0.schoolName));
                 setHTML('passName', '-');
                 setHTML('passService', '-');
                 setHTML('passDate', '-');
@@ -6424,6 +6892,9 @@
             let advance = parseInt(s.advance) || 0;
             let bal = totalFee - advance;
             if (bal < 0) bal = 0;
+
+            var pBr = getDrivingSchoolProfile_();
+            setHTML('passportSchoolTitle', escapeHtml_(pBr.schoolName));
 
             setHTML('passName', String(name));
             setHTML('passService', String(service));
@@ -6674,6 +7145,18 @@
                 setVal('loginPin', ''); 
                 hideLoader(); 
 
+                try {
+                    if (isWhiteLabelDrivingSchoolTenant_() && nanbanNativeConfigured_()) {
+                        nanbanNativeRpcCall_("recordSaaSStaffSession", [
+                            JSON.stringify({
+                                tenant_id: String(saasContext.tenantId || localStorage.getItem(TENANT_CODE_KEY) || ""),
+                                email: String((user && user.email) || ""),
+                                name: String((user && user.name) || currentUserName || "")
+                            })
+                        ]).catch(function() {});
+                    }
+                } catch (eLog) {}
+
                 // Sync UI toggle state (actual backend flag changes only when user toggles).
                 
             } else { 
@@ -6717,6 +7200,8 @@
             var tM = document.getElementById('tabMaster'); if(tM) tM.style.display = 'inline-block';
             var tSt = document.getElementById('tabSettings'); if(tSt) tSt.style.display = 'none';
         }
+        applyWhiteLabelTenantUi_();
+        applyPlatformOwnerWidgets_();
     }
 
     // =========================================================================
@@ -8749,12 +9234,20 @@
             return showToast("இந்தத் தேதியில் மாணவர்கள் யாரும் இல்லை!", "warning");
         }
 
+        var dsT = getDrivingSchoolProfile_();
+        var dsTitleT = escapeHtml_(dsT.schoolName);
+        var dsAddrT = dsT.schoolAddress ? formatDrivingSchoolFooterHtml_(dsT.schoolAddress) : "";
+        var dsPhoneT = dsT.contactPhone ? escapeHtml_(dsT.contactPhone) : "";
+        var dsFootT = dsT.receiptFooter ? formatDrivingSchoolFooterHtml_(dsT.receiptFooter) : "";
+
         let printHtml = `
         <div style="font-family: 'Plus Jakarta Sans', sans-serif; color: #1e293b; padding: 40px; background: white;">
             <!-- Header -->
             <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 4px solid #2563eb; padding-bottom: 25px; margin-bottom: 35px;">
                 <div>
-                    <h1 style="margin: 0; font-size: 32px; font-weight: 900; color: #1e3a8a; text-transform: uppercase; letter-spacing: 1px;">Nanban Driving School</h1>
+                    <h1 style="margin: 0; font-size: 32px; font-weight: 900; color: #1e3a8a; text-transform: uppercase; letter-spacing: 1px;">${dsTitleT}</h1>
+                    ${dsAddrT ? `<p style="margin: 8px 0 0 0; font-weight: 700; color: #64748b; font-size: 13px;">${dsAddrT}</p>` : ""}
+                    ${dsPhoneT ? `<p style="margin: 4px 0 0 0; font-weight: 700; color: #64748b; font-size: 13px;">📞 ${dsPhoneT}</p>` : ""}
                     <p style="margin: 5px 0 0 0; font-weight: 800; color: #3b82f6; font-size: 16px;">🎯 RTO TEST BATCH REPORT</p>
                 </div>
                 <div style="text-align: right;">
@@ -8816,6 +9309,8 @@
                 </div>
             </div>
             
+            ${dsFootT ? `<div style="margin-top: 40px; text-align: center; font-size: 12px; color: #64748b; font-weight: 700;">${dsFootT}</div>` : ""}
+
             <div style="margin-top: 60px; text-align: center; font-size: 11px; color: #94a3b8; font-weight: 700; letter-spacing: 1px;">
                 GENERATED BY NANBAN WORLD-CLASS ERP ON ${getISTDate()}
             </div>
@@ -10402,6 +10897,8 @@
             } 
         }); 
         
+        var pTdc = getDrivingSchoolProfile_();
+        setHTML("tdcSchoolBrand", escapeHtml_(pTdc.schoolName));
         setHTML('tdcDateDisplay', rawToday); setHTML('tdcTrainerName', currentUserName); 
         setHTML('tdcStartKm', String(stKm));
         setHTML('tdcEndKm', String(enKm));
@@ -10888,11 +11385,19 @@
                 </tr>`;
             }).join('');
 
+            var dsM = getDrivingSchoolProfile_();
+            var dsTitleM = escapeHtml_(dsM.schoolName);
+            var dsAddrM = dsM.schoolAddress ? formatDrivingSchoolFooterHtml_(dsM.schoolAddress) : "";
+            var dsPhoneM = dsM.contactPhone ? escapeHtml_(dsM.contactPhone) : "";
+            var dsFootM = dsM.receiptFooter ? formatDrivingSchoolFooterHtml_(dsM.receiptFooter) : "";
+
             let html = `
                 <div style="font-family:'Plus Jakarta Sans', sans-serif; padding:6mm; color:#0f172a; background:white;">
                     <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; border-bottom:3px solid #0f172a; padding-bottom:14px; margin-bottom:18px;">
                         <div>
-                            <div style="font-size:22px; font-weight:1000; letter-spacing:0.5px;">நண்பன் டிரைவிங் ஸ்கூல்</div>
+                            <div style="font-size:22px; font-weight:1000; letter-spacing:0.5px;">${dsTitleM}</div>
+                            ${dsAddrM ? `<div style="font-size:11px; color:#64748b; font-weight:800; margin-top:4px;">${dsAddrM}</div>` : ""}
+                            ${dsPhoneM ? `<div style="font-size:11px; color:#64748b; font-weight:800;">📞 ${dsPhoneM}</div>` : ""}
                             <div style="font-size:12px; color:#64748b; font-weight:900; margin-top:2px;">மாதாந்திர வரவு-செலவு அறிக்கை</div>
                             <div style="font-size:12px; color:#64748b; font-weight:800; margin-top:4px;">${period}</div>
                         </div>
@@ -10958,6 +11463,8 @@
                             </tbody>
                         </table>
                     </div>
+
+                    ${dsFootM ? `<div style="margin-top:20px; font-size:10px; color:#64748b; text-align:center;">${dsFootM}</div>` : ""}
 
                     <div style="margin-top:28px; display:flex; justify-content:space-between; font-weight:900; font-size:12px;">
                         <div style="border-top:2px solid #0f172a; width:160px; text-align:center; padding-top:8px;">Prepared By</div>
@@ -11250,11 +11757,19 @@
                 </tr>`;
             }).join('');
 
+            var dsA = getDrivingSchoolProfile_();
+            var dsTitleA = escapeHtml_(dsA.schoolName);
+            var dsAddrA = dsA.schoolAddress ? formatDrivingSchoolFooterHtml_(dsA.schoolAddress) : "";
+            var dsPhoneA = dsA.contactPhone ? escapeHtml_(dsA.contactPhone) : "";
+            var dsFootA = dsA.receiptFooter ? formatDrivingSchoolFooterHtml_(dsA.receiptFooter) : "";
+
             let html = `
                 <div style="font-family:'Plus Jakarta Sans', sans-serif; padding:6mm; color:#0f172a; background:white;">
                     <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; border-bottom:3px solid #0f172a; padding-bottom:14px; margin-bottom:18px;">
                         <div>
-                            <div style="font-size:22px; font-weight:1100; letter-spacing:0.5px;">நண்பன் டிரைவிங் ஸ்கூல்</div>
+                            <div style="font-size:22px; font-weight:1100; letter-spacing:0.5px;">${dsTitleA}</div>
+                            ${dsAddrA ? `<div style="font-size:11px; color:#64748b; font-weight:800; margin-top:4px;">${dsAddrA}</div>` : ""}
+                            ${dsPhoneA ? `<div style="font-size:11px; color:#64748b; font-weight:800;">📞 ${dsPhoneA}</div>` : ""}
                             <div style="font-size:12px; color:#64748b; font-weight:1000; margin-top:2px;">A-Z FULL AUDIT REPORT</div>
                             <div style="font-size:12px; color:#64748b; font-weight:900; margin-top:4px;">${period}</div>
                         </div>
@@ -11285,6 +11800,8 @@
                     ${tableWrap('4) Chit Auctions (Period)', `Count: ${chitRows.length}`, ['#','Date','Group','Month','Winner','Per Head','Commission','Expense','Net'], chitRowsHtml)}
                     ${tableWrap('5) Test Results (Period)', `Count: ${testRows.length}`, ['#','Date','Student','Phone','Service','Result'], testRowsHtml)}
 
+                    ${dsFootA ? `<div style="margin-top:20px; font-size:10px; color:#64748b; text-align:center;">${dsFootA}</div>` : ""}
+
                     <div style="margin-top:28px; display:flex; justify-content:space-between; font-weight:1000; font-size:12px;">
                         <div style="border-top:2px solid #0f172a; width:160px; text-align:center; padding-top:8px;">Prepared By</div>
                         <div style="border-top:2px solid #0f172a; width:160px; text-align:center; padding-top:8px;">Verified By</div>
@@ -11310,7 +11827,19 @@
         } 
         syncReportMonthSelectFromDates();
         setHTML('reportDate', (fromDt && toDt) ? `${fromDt} முதல் ${toDt} வரை` : getISTDate()); 
-        
+        (function() {
+            var rp = getDrivingSchoolProfile_();
+            setHTML("repSchoolTitle", escapeHtml_(rp.schoolName));
+            var subBits = [];
+            if (rp.schoolAddress) subBits.push(formatDrivingSchoolFooterHtml_(rp.schoolAddress));
+            if (rp.contactPhone) subBits.push("📞 " + escapeHtml_(rp.contactPhone));
+            var subEl = document.getElementById("repSchoolSub");
+            if (subEl) {
+                subEl.innerHTML = subBits.join("<br>");
+                subEl.style.display = subBits.length ? "block" : "none";
+            }
+        })();
+
         let totalIn = 0; let totalExp = 0; let ranjithIn = 0; let ranjithOut = 0; 
         let nandhaIn = 0; let nandhaOut = 0; let officeIn = 0; let officeOut = 0; 
         let incomeBreakdown = {}; let expenseBreakdown = {}; 
@@ -12845,6 +13374,10 @@
         setVal('setRtoReminderText', appSettings.appSettings.rtoReminderText || '');
         setVal('setQuizHeaderImageUrl', appSettings.appSettings.quizHeaderImageUrl || '');
         setVal('trainerAlertNum', appSettings.appSettings.trainerAlertPhone || '');
+        setVal('dsProfileSchoolName', appSettings.appSettings.schoolName || '');
+        setVal('dsProfileSchoolAddress', appSettings.appSettings.schoolAddress || '');
+        setVal('dsProfileContactPhone', appSettings.appSettings.contactPhone || '');
+        setVal('dsProfileReceiptFooter', appSettings.appSettings.receiptFooter || '');
         (function() {
             var wtp = document.getElementById('waTemplateTestPhone');
             if (wtp && !String(wtp.value || '').trim() && typeof currentUserPhone !== 'undefined' && currentUserPhone) {
@@ -13132,6 +13665,38 @@
     }
 
     function deleteReferral(index) { if (!confirm("இந்த ரெஃபரலை நீக்க வேண்டுமா?")) return; appSettings.appSettings.referrers.splice(index, 1); google.script.run.saveAppSettings("appSettings", appSettings.appSettings); renderDynamicSettings(); showToast("Deleted"); }
+    function saveDrivingSchoolProfile_() {
+        ensureNanbanAppSettingsShape_();
+        appSettings.appSettings.schoolName = String(getVal("dsProfileSchoolName") || "").trim();
+        appSettings.appSettings.schoolAddress = String(getVal("dsProfileSchoolAddress") || "").trim();
+        appSettings.appSettings.contactPhone = String(getVal("dsProfileContactPhone") || "").trim();
+        appSettings.appSettings.receiptFooter = String(getVal("dsProfileReceiptFooter") || "").trim();
+        function doneOk() {
+            showToast("நிறுவன விவரம் சேமிக்கப்பட்டது ✅");
+            renderDynamicSettings();
+        }
+        function doneFail(msg) {
+            showToast(msg || "Save failed", "danger");
+        }
+        if (nanbanNativeConfigured_()) {
+            apiCall_("saveAppSettings", "appSettings", appSettings.appSettings)
+                .then(function(r) {
+                    if (r && r.status === "success") doneOk();
+                    else doneFail((r && r.message) || "Save failed");
+                })
+                .catch(function(e) {
+                    doneFail(e && e.message ? e.message : String(e));
+                });
+            return;
+        }
+        google.script.run
+            .withSuccessHandler(doneOk)
+            .withFailureHandler(function(err) {
+                doneFail(err && err.message ? err.message : String(err));
+            })
+            .saveAppSettings("appSettings", appSettings.appSettings);
+    }
+
     function saveTrainerAlertNum() { 
         var btn = (typeof event !== "undefined" && event && event.target) ? event.target : null;
         var oldText = btn ? btn.innerText : "";

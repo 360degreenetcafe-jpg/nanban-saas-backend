@@ -8,9 +8,14 @@ const {
   setRuntimeDoc
 } = require("./snapshotStore");
 
+/**
+ * Data separation: Nanban ERP lives under businesses/Nanban (+ students/expenses in snapshot).
+ * E-Sevai POS lives under businesses/ESevai only. Admin WhatsApp for E-Sevai uses tenant id ESEVAI_ALERT_TENANT_ID (owner single line), not Nanban partner CSV.
+ */
 /** Firestore doc id for E-Sevai POS (not display name). Path: businesses/ESevai/snapshot/main + runtime/day_state */
 const ESEVAI_BUSINESS_DOC_ID = "ESevai";
 const { notifyAdminsText } = require("./adminNotify");
+const { ESEVAI_ALERT_TENANT_ID } = require("./adminPhoneResolve");
 const {
   enqueueWaOutboundSend,
   isUsableWaMediaUrl,
@@ -43,6 +48,70 @@ const CAR_SYLLABUS = [
 
 const TENANT_DEFAULT = "nanban_main";
 
+/** Inner appSettings block (services, referrers, school profile, …) from snapshot.appSettings. */
+function drivingSchoolInnerFromSnap_(snap) {
+  const root = nanbanTemplateCfg_(snap);
+  return root.appSettings && typeof root.appSettings === "object" ? root.appSettings : root;
+}
+
+function drivingSchoolReceiptTagline_(snap) {
+  const inner = drivingSchoolInnerFromSnap_(snap);
+  const name = String(inner.schoolName || "").trim();
+  if (name) return `${name} — நன்றி! 🚦`;
+  return `நண்பன் டிரைவிங் ஸ்கூல் - விபத்தில்லா தமிழ்நாடு! 🚦`;
+}
+
+/**
+ * Staff list: SaaS tenants see only their tenant_id; nanban_main / ESevai include legacy users
+ * (no tenant_id, Nanban business, or matching primary tenant).
+ */
+function includeUserInGetAppUsers_(d, requestTenantId) {
+  const req = String(requestTenantId || "").trim();
+  const rl = req.toLowerCase();
+  const legacyMain = !req || rl === "nanban_main";
+  const legacyEsevai = /^esevai$/i.test(req);
+
+  const ut = String(d.tenant_id || d.tenantId || "").trim();
+  const utl = ut.toLowerCase();
+  const businesses = Array.isArray(d.businesses) ? d.businesses : [];
+  const hasNanban = businesses.some((b) => String(b || "").trim().toLowerCase() === "nanban");
+  const hasEsevai = businesses.some((b) => String(b || "").trim().toLowerCase() === "esevai");
+
+  if (legacyMain || legacyEsevai) {
+    if (!ut) return true;
+    if (utl === "nanban_main") return true;
+    if (hasNanban) return true;
+    if (legacyEsevai && (utl === "esevai" || hasEsevai)) return true;
+    return false;
+  }
+
+  return utl === rl;
+}
+
+/**
+ * Driving-school ERP snapshot: businesses/{id}/snapshot/main.
+ * nanban_main (and ESevai as RPC tenant) use legacy doc "Nanban"; SaaS schools use doc id === tenant_id.
+ */
+function nanbanBusinessDocIdForTenant(tenantId) {
+  const t = String(tenantId || "").trim();
+  if (/^esevai$/i.test(t)) return "Nanban";
+  if (!t || t === "nanban_main") return "Nanban";
+  return t;
+}
+
+async function assertSaasTrialAllowsWrites_(tenantId) {
+  const t = String(tenantId || "").trim();
+  if (!t || t === "nanban_main" || /^esevai$/i.test(t)) return;
+  const doc = await admin.firestore().collection("platform_tenants").doc(t).get();
+  if (!doc.exists) return;
+  const te = (doc.data() || {}).trial_ends_at;
+  if (te && typeof te.toMillis === "function" && te.toMillis() < Date.now()) {
+    const e = new Error("trial_expired");
+    e.code = "trial_expired";
+    throw e;
+  }
+}
+
 function normPhone10(p) {
   let d = String(p || "").replace(/\D/g, "");
   if (d.length > 10) d = d.slice(-10);
@@ -52,6 +121,27 @@ function normPhone10(p) {
 function waE164_(phone) {
   const d = normPhone10(phone);
   return d.length === 10 ? `91${d}` : "";
+}
+
+const SCHOOL_REG_OTP_PEPPER = String(process.env.SCHOOL_REG_OTP_PEPPER || "nanban_school_reg_otp_v1");
+
+function hashSchoolRegOtp_(code6) {
+  return crypto.createHash("sha256").update(`${SCHOOL_REG_OTP_PEPPER}:${String(code6 || "").trim()}`).digest("hex");
+}
+
+function randomSixDigitOtp_() {
+  return String(100000 + Math.floor(Math.random() * 900000));
+}
+
+function timingSafeEqualStr_(a, b) {
+  const x = String(a || "");
+  const y = String(b || "");
+  if (x.length !== y.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(x, "utf8"), Buffer.from(y, "utf8"));
+  } catch (_e) {
+    return false;
+  }
 }
 
 function ensureExpenseRowWithId_(raw) {
@@ -173,20 +263,30 @@ async function uploadBufferToDefaultBucket_({ buf, contentType, rawName }) {
   throw lastErr || new Error("storage_upload_failed_all_buckets");
 }
 
+/** Trailing RPC arg tenant codes (includes ESevai without underscore). */
+const TRAILING_TENANT_EXACT = new Set(["ESevai", "esevai"]);
+
+function looksLikeRpcTenantToken_(last) {
+  if (typeof last !== "string" || !last || last.length >= 48) return false;
+  if (last.includes(" ") || last.includes("/") || last.startsWith("{")) return false;
+  if (TRAILING_TENANT_EXACT.has(last)) return true;
+  if (last.includes("_")) return true;
+  if (/^ds-[a-z0-9-]+$/i.test(last)) return true;
+  if (/^esevai$/i.test(last)) return true;
+  return false;
+}
+
+function normalizePopTenantId_(raw) {
+  const s = String(raw || "").trim();
+  if (/^esevai$/i.test(s)) return "ESevai";
+  return s;
+}
+
 function popTenantFromArgs(args) {
   if (!Array.isArray(args) || !args.length) return { tenantId: TENANT_DEFAULT, args: [] };
   const last = args[args.length - 1];
-  // Only treat trailing string as tenant when it looks like a tenant code (e.g. nanban_main), not a person's name.
-  if (
-    typeof last === "string" &&
-    last.length > 0 &&
-    last.length < 48 &&
-    !last.includes(" ") &&
-    !last.includes("/") &&
-    !last.startsWith("{") &&
-    last.includes("_")
-  ) {
-    return { tenantId: last, args: args.slice(0, -1) };
+  if (typeof last === "string" && looksLikeRpcTenantToken_(last)) {
+    return { tenantId: normalizePopTenantId_(last), args: args.slice(0, -1) };
   }
   return { tenantId: TENANT_DEFAULT, args };
 }
@@ -255,21 +355,24 @@ async function persistEsevai(data) {
   await setBusinessSnapshotDoc(ESEVAI_BUSINESS_DOC_ID, data, true);
 }
 
-async function saveNanbanPartial(patch) {
-  const snap = await getBusinessSnapshotDoc("Nanban");
+async function saveNanbanPartial(tenantId, patch) {
+  await assertSaasTrialAllowsWrites_(tenantId);
+  const bid = nanbanBusinessDocIdForTenant(tenantId);
+  const snap = await getBusinessSnapshotDoc(bid);
   const next = Object.assign({}, snap, patch, {
     updated_at: admin.firestore.FieldValue.serverTimestamp()
   });
-  await setBusinessSnapshotDoc("Nanban", next, true);
+  await setBusinessSnapshotDoc(bid, next, true);
 }
 
-async function loadNanbanChit() {
-  const snap = await getBusinessSnapshotDoc("Nanban");
+async function loadNanbanChit(tenantId) {
+  const bid = nanbanBusinessDocIdForTenant(tenantId);
+  const snap = await getBusinessSnapshotDoc(bid);
   return { snap, chit: normalizeChit(snap.chitData) };
 }
 
-async function persistChit(chit) {
-  await saveNanbanPartial({ chitData: chit });
+async function persistChit(tenantId, chit) {
+  await saveNanbanPartial(tenantId, { chitData: chit });
 }
 
 function upiLink_(amount, name, upiId) {
@@ -291,6 +394,318 @@ async function handleErpRpc(action, rawArgs) {
       case "bridgePingAction":
         return { status: "success", pong: true, native: true };
 
+      case "sendSchoolRegistrationOtp": {
+        const idToken = String(args[0] || "").trim();
+        const adminPhoneRaw = String(args[1] || "").trim();
+        if (!idToken) {
+          return { status: "error", message: "Google sign-in required." };
+        }
+        const phone10 = normPhone10(adminPhoneRaw);
+        if (phone10.length !== 10) {
+          return { status: "error", message: "Enter a valid 10-digit mobile number." };
+        }
+        let decoded;
+        try {
+          decoded = await admin.auth().verifyIdToken(idToken);
+        } catch (_verifyErr) {
+          return { status: "error", message: "Invalid or expired session. Please sign in with Google again." };
+        }
+        const uid = String(decoded.uid || "").trim();
+        if (!uid) {
+          return { status: "error", message: "Invalid Google account." };
+        }
+        const db = admin.firestore();
+        const metaRef = db.collection("registration_otp_meta").doc(uid);
+        const now = Date.now();
+        const metaSnap = await metaRef.get();
+        const meta = metaSnap.exists ? metaSnap.data() || {} : {};
+        const last = meta.last_sent_at && meta.last_sent_at.toMillis ? meta.last_sent_at.toMillis() : 0;
+        if (last && now - last < 55 * 1000) {
+          return { status: "error", message: "Please wait a minute before requesting another OTP." };
+        }
+        const windowStart = now - 60 * 60 * 1000;
+        const sendsLastHour = typeof meta.sends_last_hour === "number" ? meta.sends_last_hour : 0;
+        const windowMs = meta.rate_window_start && meta.rate_window_start.toMillis ? meta.rate_window_start.toMillis() : 0;
+        let count = sendsLastHour;
+        if (!windowMs || windowMs < windowStart) {
+          count = 0;
+        }
+        if (count >= 5) {
+          return { status: "error", message: "Too many OTP requests. Try again after one hour." };
+        }
+        const plain = randomSixDigitOtp_();
+        const codeHash = hashSchoolRegOtp_(plain);
+        const expiresAt = admin.firestore.Timestamp.fromMillis(now + 10 * 60 * 1000);
+        await db.collection("registration_otps").doc(uid).set(
+          {
+            phone10,
+            code_hash: codeHash,
+            expires_at: expiresAt,
+            attempts: 0,
+            created_at: admin.firestore.FieldValue.serverTimestamp()
+          },
+          { merge: false }
+        );
+        await metaRef.set(
+          {
+            last_sent_at: admin.firestore.FieldValue.serverTimestamp(),
+            rate_window_start:
+              !windowMs || windowMs < windowStart
+                ? admin.firestore.FieldValue.serverTimestamp()
+                : meta.rate_window_start,
+            sends_last_hour: count + 1
+          },
+          { merge: true }
+        );
+        const waTo = waE164_(phone10);
+        if (!waTo) {
+          return { status: "error", message: "Invalid phone for WhatsApp." };
+        }
+        const otpMsg =
+          `🔐 *Wheels Nanban (wheelsnanban.in)*\n\nYour school registration OTP is: *${plain}*\nValid 10 minutes. Do not share this code.`;
+        try {
+          await enqueueWaOutboundSend(
+            {
+              tenantId: TENANT_DEFAULT,
+              to: waTo,
+              message: otpMsg,
+              messageType: "text",
+              metadata: { kind: "school_reg_otp" }
+            },
+            { delaySeconds: 0 }
+          );
+        } catch (waErr) {
+          console.error(`SCHOOL_REG_OTP_WA_FAILED ${String(waErr && waErr.message ? waErr.message : waErr)}`);
+          return {
+            status: "error",
+            message: "Could not send OTP on WhatsApp. Check the number has WhatsApp or try again later."
+          };
+        }
+        return { status: "success", message: "OTP sent to WhatsApp.", expires_in_sec: 600 };
+      }
+
+      case "recordTenantSession": {
+        const idToken = String(args[0] || "").trim();
+        if (!idToken) return { status: "error", message: "token_required" };
+        let dec;
+        try {
+          dec = await admin.auth().verifyIdToken(idToken);
+        } catch (_e) {
+          return { status: "error", message: "invalid_token" };
+        }
+        const db = admin.firestore();
+        const udoc = await db.collection("users").doc(String(dec.uid || "")).get();
+        if (!udoc.exists) return { status: "success", skipped: true };
+        const tid = String(udoc.data()?.tenant_id || "").trim();
+        if (!tid.startsWith("ds-")) return { status: "success", skipped: true };
+        await db
+          .collection("platform_tenants")
+          .doc(tid)
+          .set(
+            {
+              last_session_at: admin.firestore.FieldValue.serverTimestamp(),
+              last_session_email: String(dec.email || "").toLowerCase().slice(0, 120),
+              last_session_name: String(dec.name || "").slice(0, 80),
+              last_session_via: "google"
+            },
+            { merge: true }
+          );
+        return { status: "success" };
+      }
+
+      case "recordSaaSStaffSession": {
+        let payload;
+        try {
+          payload = JSON.parse(String(args[0] || "{}"));
+        } catch (_e) {
+          return { status: "error", message: "bad_json" };
+        }
+        const tid = String(payload.tenant_id || "").trim();
+        if (!tid.startsWith("ds-")) return { status: "success", skipped: true };
+        const db = admin.firestore();
+        await db
+          .collection("platform_tenants")
+          .doc(tid)
+          .set(
+            {
+              last_session_at: admin.firestore.FieldValue.serverTimestamp(),
+              last_session_email: String(payload.email || "").toLowerCase().slice(0, 120),
+              last_session_name: String(payload.name || "").slice(0, 80),
+              last_session_via: "pin"
+            },
+            { merge: true }
+          );
+        return { status: "success" };
+      }
+
+      case "listSaaSDrivingSchoolActivity": {
+        if (tenantId !== "nanban_main") {
+          return { status: "error", message: "Only main platform tenant can view this list." };
+        }
+        const db = admin.firestore();
+        let qs;
+        try {
+          qs = await db.collection("platform_tenants").where("is_saas_school", "==", true).limit(200).get();
+        } catch (_e) {
+          qs = await db.collection("platform_tenants").limit(300).get();
+        }
+        const schools = [];
+        qs.forEach((doc) => {
+          if (!String(doc.id || "").startsWith("ds-")) return;
+          const d = doc.data() || {};
+          let lastS = null;
+          if (d.last_session_at && typeof d.last_session_at.toMillis === "function") {
+            lastS = d.last_session_at.toMillis();
+          }
+          schools.push({
+            tenant_id: doc.id,
+            school_name: String(d.school_name || ""),
+            owner_email: String(d.owner_email || ""),
+            last_session_at: lastS,
+            last_session_email: String(d.last_session_email || ""),
+            last_session_name: String(d.last_session_name || ""),
+            last_session_via: String(d.last_session_via || "")
+          });
+        });
+        schools.sort((a, b) => (b.last_session_at || 0) - (a.last_session_at || 0));
+        return { status: "success", schools };
+      }
+
+      case "registerNewDrivingSchool": {
+        const idToken = String(args[0] || "").trim();
+        const schoolName = String(args[1] || "").trim().slice(0, 120);
+        const adminPhoneRaw = String(args[2] || "").trim();
+        const otpPlain = String(args[3] || "").trim().replace(/\D/g, "");
+        if (!idToken || !schoolName || schoolName.length < 2) {
+          return { status: "error", message: "School name and Google sign-in are required." };
+        }
+        if (otpPlain.length !== 6) {
+          return { status: "error", message: "Enter the 6-digit OTP sent to your WhatsApp." };
+        }
+        const phone10 = normPhone10(adminPhoneRaw);
+        if (phone10.length !== 10) {
+          return { status: "error", message: "Enter a valid 10-digit admin mobile number." };
+        }
+        let decoded;
+        try {
+          decoded = await admin.auth().verifyIdToken(idToken);
+        } catch (_verifyErr) {
+          return { status: "error", message: "Invalid or expired session. Please sign in with Google again." };
+        }
+        const uid = String(decoded.uid || "").trim();
+        const db = admin.firestore();
+        const otpRef = db.collection("registration_otps").doc(uid);
+        const otpSnap = await otpRef.get();
+        if (!otpSnap.exists) {
+          return { status: "error", message: "No OTP found. Tap Send OTP first." };
+        }
+        const od = otpSnap.data() || {};
+        if (String(od.phone10 || "") !== phone10) {
+          return { status: "error", message: "Mobile number does not match OTP request." };
+        }
+        const exp = od.expires_at;
+        if (exp && exp.toMillis && exp.toMillis() < Date.now()) {
+          return { status: "error", message: "OTP expired. Request a new one." };
+        }
+        const attempts = parseInt(od.attempts, 10) || 0;
+        if (attempts >= 8) {
+          return { status: "error", message: "Too many wrong attempts. Request a new OTP." };
+        }
+        const expectedHash = String(od.code_hash || "");
+        const gotHash = hashSchoolRegOtp_(otpPlain);
+        if (!timingSafeEqualStr_(expectedHash, gotHash)) {
+          await otpRef.set({ attempts: attempts + 1 }, { merge: true });
+          return { status: "error", message: "Wrong OTP. Try again." };
+        }
+        const email = String(decoded.email || "").trim().toLowerCase();
+        if (!email) {
+          return { status: "error", message: "Google account must have an email address." };
+        }
+        if (!uid) {
+          return { status: "error", message: "Invalid Google account." };
+        }
+        const userRef = db.collection("users").doc(uid);
+        const existingU = await userRef.get();
+        if (existingU.exists) {
+          return { status: "error", message: "This Google account is already registered." };
+        }
+        const dupe = await db.collection("users").where("email", "==", email).limit(1).get();
+        if (!dupe.empty) {
+          return { status: "error", message: "This email is already registered." };
+        }
+
+        const newTenantId = `ds-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
+        const trialEnd = new Date();
+        trialEnd.setDate(trialEnd.getDate() + 2);
+        const trialTs = admin.firestore.Timestamp.fromDate(trialEnd);
+        const waPhone = `91${phone10}`;
+        const displayName = String(decoded.name || schoolName || "Admin").trim().slice(0, 80);
+
+        const emptyChit = { groups: [], members: [], auctions: [], payments: [], bids: [], schedule: [] };
+        const initialSnapshot = {
+          students: [],
+          expenses: [],
+          appSettings: {
+            appSettings: {
+              schoolName,
+              adminPhone: phone10,
+              trainerAlertPhone: waPhone
+            }
+          },
+          chitData: emptyChit,
+          updated_at: admin.firestore.FieldValue.serverTimestamp()
+        };
+
+        const batch = db.batch();
+        batch.delete(otpRef);
+        batch.set(
+          db.collection("platform_tenants").doc(newTenantId),
+          {
+            school_name: schoolName,
+            owner_email: email,
+            admin_phones: [waPhone],
+            trial_ends_at: trialTs,
+            created_at: admin.firestore.FieldValue.serverTimestamp(),
+            nanban_business_doc: newTenantId,
+            plan: "trial",
+            is_saas_school: true
+          },
+          { merge: false }
+        );
+        batch.set(
+          userRef,
+          {
+            name: displayName,
+            email,
+            pin: "",
+            role: "Admin",
+            phone: phone10,
+            tenant_id: newTenantId,
+            businesses: ["Nanban"],
+            trial_ends_at: trialTs,
+            created_at: admin.firestore.FieldValue.serverTimestamp()
+          },
+          { merge: false }
+        );
+        await batch.commit();
+        await setBusinessSnapshotDoc(newTenantId, initialSnapshot, true);
+
+        return {
+          status: "success",
+          tenant_id: newTenantId,
+          trial_ends_at: trialEnd.toISOString(),
+          profile: {
+            id: uid,
+            name: displayName,
+            email,
+            role: "Admin",
+            phone: phone10,
+            tenant_id: newTenantId,
+            businesses: ["Nanban"]
+          }
+        };
+      }
+
       case "setupESevaiDeliveryReminderTrigger":
       case "setupESevaiAgentLlrReminderTrigger":
       case "setupAllDailyTriggers":
@@ -301,7 +716,7 @@ async function handleErpRpc(action, rawArgs) {
 
       case "getDatabaseData": {
         // Firestore path: businesses/Nanban/snapshot/main — getBusinessSnapshotDoc coerces JSON strings / maps to arrays.
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         return {
           status: "success",
           students: Array.isArray(snap.students) ? snap.students : [],
@@ -311,7 +726,7 @@ async function handleErpRpc(action, rawArgs) {
       }
 
       case "getChitData": {
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const chit =
           snap.chitData && typeof snap.chitData === "object"
             ? snap.chitData
@@ -320,7 +735,7 @@ async function handleErpRpc(action, rawArgs) {
       }
 
       case "getAppSettings": {
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         return snap.appSettings || {};
       }
 
@@ -330,13 +745,25 @@ async function handleErpRpc(action, rawArgs) {
         const users = [];
         qs.forEach((doc) => {
           const d = doc.data() || {};
+          if (!includeUserInGetAppUsers_(d, tenantId)) return;
+          let trialEnds = d.trial_ends_at;
+          if (trialEnds && typeof trialEnds.toDate === "function") {
+            trialEnds = trialEnds.toDate().toISOString();
+          } else if (trialEnds) {
+            trialEnds = String(trialEnds);
+          } else {
+            trialEnds = null;
+          }
           users.push({
             id: doc.id,
             name: String(d.name || "").trim(),
             pin: String(d.pin || "").trim(),
             role: String(d.role || "Staff").trim(),
             phone: String(d.phone || "").trim(),
-            businesses: Array.isArray(d.businesses) ? d.businesses : []
+            email: String(d.email || d.Email || "").trim().toLowerCase(),
+            tenant_id: String(d.tenant_id || d.tenantId || "").trim(),
+            businesses: Array.isArray(d.businesses) ? d.businesses : [],
+            trial_ends_at: trialEnds
           });
         });
         return users;
@@ -349,13 +776,19 @@ async function handleErpRpc(action, rawArgs) {
       case "saveAppSettings": {
         const key = args[0];
         const val = args[1];
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const appSettings = snap.appSettings && typeof snap.appSettings === "object" ? { ...snap.appSettings } : {};
-        if (key === "appSettings") Object.assign(appSettings, val || {});
-        else if (key === "serviceSplits") appSettings.serviceSplits = val || {};
+        if (key === "appSettings") {
+          const prevInner =
+            appSettings.appSettings && typeof appSettings.appSettings === "object"
+              ? { ...appSettings.appSettings }
+              : {};
+          const incoming = val && typeof val === "object" ? val : {};
+          appSettings.appSettings = { ...prevInner, ...incoming };
+        } else if (key === "serviceSplits") appSettings.serviceSplits = val || {};
         else if (key === "vehicleKm") appSettings.vehicleKm = val || {};
         else appSettings[key] = val;
-        await saveNanbanPartial({ appSettings });
+        await saveNanbanPartial(tenantId, { appSettings });
         return { status: "success" };
       }
 
@@ -363,12 +796,12 @@ async function handleErpRpc(action, rawArgs) {
         const s = args[0];
         if (!s || !s.id) return { status: "error", message: "Invalid student" };
         s.phone = normPhone10(s.phone);
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         let students = Array.isArray(snap.students) ? [...snap.students] : [];
         const prev = students.find((x) => String(x.id) === String(s.id)) || null;
         students = students.filter((x) => String(x.id) !== String(s.id));
         students.unshift(s);
-        await saveNanbanPartial({ students });
+        await saveNanbanPartial(tenantId, { students });
         try {
           await notifyNanbanAfterStudentWrite_(tenantId, prev, s);
         } catch (waErr) {
@@ -405,7 +838,7 @@ async function handleErpRpc(action, rawArgs) {
       case "updateStudentData": {
         const s = args[0];
         if (!s || s.id == null) return { status: "error", message: "Invalid student" };
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         let students = Array.isArray(snap.students) ? [...snap.students] : [];
         const ix = students.findIndex((x) => String(x.id) === String(s.id));
         if (ix < 0) return { status: "error", message: "Not found" };
@@ -416,7 +849,7 @@ async function handleErpRpc(action, rawArgs) {
           id: prev.id,
           phone: phoneNorm || prev.phone
         });
-        await saveNanbanPartial({ students });
+        await saveNanbanPartial(tenantId, { students });
         try {
           await notifyNanbanAfterStudentWrite_(tenantId, prev, students[ix]);
         } catch (waErr) {
@@ -435,12 +868,12 @@ async function handleErpRpc(action, rawArgs) {
         const raw = args[0];
         if (!raw || typeof raw !== "object") return { status: "error", message: "Invalid expense" };
         const e = ensureExpenseRowWithId_(raw);
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const expenses = Array.isArray(snap.expenses) ? [...snap.expenses] : [];
         const dup = e.id && expenses.some((x) => x && String(x.id) === String(e.id));
         if (dup) return { status: "error", message: "Duplicate expense id" };
         expenses.push(e);
-        await saveNanbanPartial({ expenses });
+        await saveNanbanPartial(tenantId, { expenses });
         const catStr = String(e.cat || "");
         const isIncome =
           catStr.includes("வரவு") || /\bincome\b/i.test(catStr) || catStr.includes("(In)");
@@ -577,7 +1010,7 @@ async function handleErpRpc(action, rawArgs) {
         if (String(m.phone || "").length !== 10) {
           return { status: "error", message: "Invalid phone (10-digit required)" };
         }
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const chit = snap.chitData && typeof snap.chitData === "object" ? { ...snap.chitData } : { groups: [], members: [], auctions: [], payments: [], bids: [], schedule: [] };
         if (!Array.isArray(chit.members)) chit.members = [];
         const id = Date.now();
@@ -589,7 +1022,7 @@ async function handleErpRpc(action, rawArgs) {
           joinedBy: m.joinedBy,
           date: getISTDateString()
         });
-        await saveNanbanPartial({ chitData: chit });
+        await saveNanbanPartial(tenantId, { chitData: chit });
         return { status: "success" };
       }
 
@@ -599,23 +1032,23 @@ async function handleErpRpc(action, rawArgs) {
         if (String(m.phone || "").length !== 10) {
           return { status: "error", message: "Invalid phone (10-digit required)" };
         }
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const chit = snap.chitData && typeof snap.chitData === "object" ? { ...snap.chitData } : {};
         if (!Array.isArray(chit.members)) chit.members = [];
         const idx = chit.members.findIndex((x) => String(x.id) === String(m.id));
         if (idx < 0) return { status: "error" };
         chit.members[idx] = Object.assign({}, chit.members[idx], m);
-        await saveNanbanPartial({ chitData: chit });
+        await saveNanbanPartial(tenantId, { chitData: chit });
         return { status: "success" };
       }
 
       case "deleteChitMemberData": {
         const id = args[0];
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const chit = snap.chitData && typeof snap.chitData === "object" ? { ...snap.chitData } : {};
         if (!Array.isArray(chit.members)) chit.members = [];
         chit.members = chit.members.filter((x) => String(x.id) !== String(id));
-        await saveNanbanPartial({ chitData: chit });
+        await saveNanbanPartial(tenantId, { chitData: chit });
         return { status: "success" };
       }
 
@@ -867,7 +1300,7 @@ async function handleErpRpc(action, rawArgs) {
         }
 
         await notifyAdminsText(
-          tenantId,
+          ESEVAI_ALERT_TENANT_ID,
           `🧾 E-Sevai POS Bill\nBill: ${txId}\nAmount: ₹${totalAmt}\nReceived: ₹${recvAmt}\nMode: ${tx.paymentMode || "Cash"}\nDate: ${today}`
         );
 
@@ -948,7 +1381,7 @@ async function handleErpRpc(action, rawArgs) {
         if (type === "class") amt = 0;
         const trainer = String(args[5] || "Trainer");
         const today = getISTDateString();
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         let students = Array.isArray(snap.students) ? [...snap.students] : [];
         const ix = students.findIndex((x) => String(x.id) === String(studentId));
         if (ix < 0) return { status: "error", message: "Student Not Found" };
@@ -988,7 +1421,7 @@ async function handleErpRpc(action, rawArgs) {
         }
 
         students[ix] = s;
-        await saveNanbanPartial({ students });
+        await saveNanbanPartial(tenantId, { students });
         try {
           await notifyAdminsText(tenantId, admMsg);
         } catch (e) {}
@@ -1059,7 +1492,7 @@ async function handleErpRpc(action, rawArgs) {
                 );
                 s.feedbackSent = true;
                 students[ix] = s;
-                await saveNanbanPartial({ students });
+                await saveNanbanPartial(tenantId, { students });
               }
             }
             if (amt > 0) {
@@ -1106,7 +1539,7 @@ async function handleErpRpc(action, rawArgs) {
         const trainerName = String(args[2] || "");
         const nextDate = args[3];
         const today = getISTDateString();
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         let students = Array.isArray(snap.students) ? [...snap.students] : [];
         const ix = students.findIndex((x) => String(x.id) === String(studentId));
         if (ix < 0) return { status: "error" };
@@ -1118,7 +1551,7 @@ async function handleErpRpc(action, rawArgs) {
           s.status = "License_Completed";
           s.adminRemarks.unshift({ date: today, text: `🏆 RTO டெஸ்ட் பாஸ்! (Trainer: ${trainerName})` });
           students[ix] = s;
-          await saveNanbanPartial({ students });
+          await saveNanbanPartial(tenantId, { students });
           const wa = waE164_(s.phone);
           if (wa) {
             await enqueueWaOutboundSend(
@@ -1142,7 +1575,7 @@ async function handleErpRpc(action, rawArgs) {
             s.testStatus = "Pending";
           }
           students[ix] = s;
-          await saveNanbanPartial({ students });
+          await saveNanbanPartial(tenantId, { students });
           await notifyAdminsText(tenantId, `❌ *TEST ${resultStr.toUpperCase()}:* ${s.name} டெஸ்டில் ${resText}. ${dtTxt}`);
         }
         return { status: "success" };
@@ -1159,7 +1592,7 @@ async function handleErpRpc(action, rawArgs) {
         const oldDesc = String(expObj?.desc || "").trim();
         const amt2 = parseInt(newAmt, 10) || 0;
         const desc2 = String(newDesc || "").trim();
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const expenses = Array.isArray(snap.expenses) ? [...snap.expenses] : [];
         let hit = -1;
         const targetId = String(expObj?.id || "").trim();
@@ -1186,7 +1619,7 @@ async function handleErpRpc(action, rawArgs) {
           updated.id = ensureExpenseRowWithId_(updated).id;
         }
         expenses[hit] = updated;
-        await saveNanbanPartial({ expenses });
+        await saveNanbanPartial(tenantId, { expenses });
         await notifyAdminsText(
           tenantId,
           `📝 Expense Updated:\n${oldDate} | ${oldSpender}\nCat: ${oldCat}\nAmount: ₹${amt2}\nDesc: ${desc2}`
@@ -1196,7 +1629,7 @@ async function handleErpRpc(action, rawArgs) {
 
       case "sendBulkMessageAction": {
         const msgText = String(args[0] || "");
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const cfg = nanbanTemplateCfg_(snap);
         const tpl = cfg.bulkTemplate || "bulk_announcement";
         const students = Array.isArray(snap.students) ? snap.students : [];
@@ -1240,7 +1673,7 @@ async function handleErpRpc(action, rawArgs) {
 
       case "sendWelcomeMessageAction": {
         const studentId = args[0];
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const s = (snap.students || []).find((x) => String(x.id) === String(studentId));
         if (!s) return { status: "error", message: "Student Not Found" };
         const { processWaNativeJob } = require("./waNativeJobProcessor");
@@ -1259,13 +1692,14 @@ async function handleErpRpc(action, rawArgs) {
         const loggedBy = args[3];
         const amt = parseInt(amount, 10) || 0;
         if (amt <= 0) return { status: "error", message: "Invalid amount" };
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const s = (snap.students || []).find((x) => String(x.id) === String(studentId));
         if (!s) return { status: "error", message: "Student not found" };
         const today = getISTDateString();
         const recv = String(receiver || loggedBy || "System");
         const bal =
           (parseInt(s.totalFee, 10) || 0) - (parseInt(s.advance, 10) || 0) - (parseInt(s.discount, 10) || 0);
+        const tagline = drivingSchoolReceiptTagline_(snap);
         const msg =
           `💰 *கட்டண ரசீது (Receipt)*\n\n` +
           `மாணவர்: ${s.name}\n` +
@@ -1273,12 +1707,12 @@ async function handleErpRpc(action, rawArgs) {
           `பெற்றவர்: ${recv}\n` +
           `தேதி: ${today}\n` +
           `மீதம்: ₹${bal}\n\n` +
-          `நண்பன் டிரைவிங் ஸ்கூல் - விபத்தில்லா தமிழ்நாடு! 🚦`;
+          tagline;
         const wa = waE164_(s.phone);
         if (wa) {
           await enqueueWaOutboundSend(
             {
-              tenantId: TENANT_DEFAULT,
+              tenantId,
               to: wa,
               message: msg,
               messageType: "text",
@@ -1312,7 +1746,7 @@ async function handleErpRpc(action, rawArgs) {
         await setRuntimeDoc("Nanban", "nanban_km_today", { date_ist: today, value: String(runKm) });
         await setRuntimeDoc("Nanban", "trainer_km_session", { session: null });
 
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const appSettings =
           snap.appSettings && typeof snap.appSettings === "object" ? { ...snap.appSettings } : {};
         const vk = appSettings.vehicleKm || { current: 0, lastService: 0, nextService: 5000 };
@@ -1412,7 +1846,7 @@ async function handleErpRpc(action, rawArgs) {
           });
         }
 
-        await saveNanbanPartial({ students, expenses, appSettings });
+        await saveNanbanPartial(tenantId, { students, expenses, appSettings });
 
         const expectedHandover = totalCollected + spotIncome - expAmt;
         let closeMsg = `🏁 *DAY CLOSE REPORT (${trainer})*\n\n`;
@@ -1438,7 +1872,7 @@ async function handleErpRpc(action, rawArgs) {
           if (trainerUser && trainerUser.phone) {
             const waT = waE164_(trainerUser.phone);
             if (waT) {
-              const cfg = nanbanTemplateCfg_(await getBusinessSnapshotDoc("Nanban"));
+              const cfg = nanbanTemplateCfg_(await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId)));
               const tplName = cfg.dayCloseTemplate || "day_close_report";
               try {
                 await enqueueWaOutboundSend(
@@ -1480,7 +1914,7 @@ async function handleErpRpc(action, rawArgs) {
 
       case "getStudentPassportData": {
         const studentId = args[0];
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const s = (snap.students || []).find((x) => String(x.id) === String(studentId));
         if (s) return { status: "success", data: s };
         return { status: "error", message: "Student Not Found" };
@@ -1488,7 +1922,7 @@ async function handleErpRpc(action, rawArgs) {
 
       case "sendLLR30DayReminder": {
         const studentId = args[0];
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const s = (snap.students || []).find((x) => String(x.id) === String(studentId));
         if (!s) return { status: "error", message: `மாணவர் கிடைக்கவில்லை! (ID: ${studentId})` };
         const wa = waE164_(s.phone);
@@ -1503,7 +1937,7 @@ async function handleErpRpc(action, rawArgs) {
 
       case "sendLLRExpireReminder": {
         const studentId = args[0];
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const s = (snap.students || []).find((x) => String(x.id) === String(studentId));
         if (!s) return { status: "error", message: `மாணவர் கிடைக்கவில்லை! (ID: ${studentId})` };
         const wa = waE164_(s.phone);
@@ -1541,7 +1975,7 @@ async function handleErpRpc(action, rawArgs) {
         const studentId = args[0];
         const itemKey = args[1];
         const isCompleted = !!args[2];
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         let students = Array.isArray(snap.students) ? snap.students.map((x) => ({ ...x })) : [];
         const ix = students.findIndex((x) => String(x.id) === String(studentId));
         if (ix < 0) return { status: "error", message: "Student not found" };
@@ -1550,14 +1984,14 @@ async function handleErpRpc(action, rawArgs) {
         st.syllabus[itemKey] = isCompleted;
         st.syllabusLastUpdate = getISTDateString();
         students[ix] = st;
-        await saveNanbanPartial({ students });
+        await saveNanbanPartial(tenantId, { students });
         return { status: "success", syllabus: st.syllabus };
       }
 
       case "sendPaymentReminderAction": {
         const studentId = args[0];
         const adminName = String(args[1] || "");
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const s = (snap.students || []).find((x) => String(x.id) === String(studentId));
         if (!s) return { status: "error", msg: "Student not found" };
         const bal =
@@ -1616,7 +2050,7 @@ async function handleErpRpc(action, rawArgs) {
           if (!Array.isArray(st.adminRemarks)) st.adminRemarks = [];
           st.adminRemarks.unshift({ date: getISTDateString(), text: `🔔 Payment Reminder அனுப்பப்பட்டது (${adminName})` });
           students[ix] = st;
-          await saveNanbanPartial({ students });
+          await saveNanbanPartial(tenantId, { students });
         }
         return { status: "success", msg: "மெசேஜ் அனுப்பப்பட்டது!" };
       }
@@ -1625,7 +2059,7 @@ async function handleErpRpc(action, rawArgs) {
         const studentIds = args[0];
         const type = args[1];
         if (!Array.isArray(studentIds) || !studentIds.length) return { status: "error", msg: "No students selected." };
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const list = snap.students || [];
         let sentCount = 0;
         let failCount = 0;
@@ -1689,7 +2123,7 @@ async function handleErpRpc(action, rawArgs) {
         const newDate = args[3];
         const adminName = String(args[4] || "");
         const today = getISTDateString();
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         let students = Array.isArray(snap.students) ? snap.students.map((x) => ({ ...x })) : [];
         const ix = students.findIndex((x) => String(x.id) === String(studentId));
         if (ix < 0) return { status: "error" };
@@ -1715,7 +2149,7 @@ async function handleErpRpc(action, rawArgs) {
         if (!Array.isArray(s.adminRemarks)) s.adminRemarks = [];
         s.adminRemarks.unshift({ date: today, text: `🔄 Re-Test பதிவு: ₹${testFee}. தேதி: ${newDate}` });
         students[ix] = s;
-        await saveNanbanPartial({ students });
+        await saveNanbanPartial(tenantId, { students });
         await notifyAdminsText(tenantId, `🔄 *Re-Test பதிவு:*\nமாணவர்: ${s.name}\nகட்டணம்: ₹${testFee}\nதேதி: ${newDate}`);
         const wa = waE164_(s.phone);
         if (wa) {
@@ -1760,7 +2194,7 @@ async function handleErpRpc(action, rawArgs) {
         const desc = String(args[3] || "");
         const loggedBy = String(args[4] || "");
         const d = getISTDateString();
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const expenses = Array.isArray(snap.expenses) ? [...snap.expenses] : [];
         expenses.unshift({
           date: d,
@@ -1776,7 +2210,7 @@ async function handleErpRpc(action, rawArgs) {
           amt,
           desc: `From ${fromPerson}: ${desc} (By ${loggedBy})`
         });
-        await saveNanbanPartial({ expenses });
+        await saveNanbanPartial(tenantId, { expenses });
         await notifyAdminsText(
           tenantId,
           `🔄 *பணப் பரிமாற்றம் (Transfer)*\n\nகொடுத்தவர்: ${fromPerson}\nபெற்றவர்: ${toPerson}\nதொகை: ₹${amt}\nவிவரம்: ${desc}\nபதிவு: ${loggedBy}`
@@ -1786,7 +2220,7 @@ async function handleErpRpc(action, rawArgs) {
 
       case "saveChitGroup": {
         const gObj = args[0] || {};
-        const { chit } = await loadNanbanChit();
+        const { chit } = await loadNanbanChit(tenantId);
         const idToUse = gObj.id || String(Date.now());
         const row = {
           id: idToUse,
@@ -1804,14 +2238,14 @@ async function handleErpRpc(action, rawArgs) {
         if (gi >= 0) groups[gi] = row;
         else groups.push(row);
         chit.groups = groups;
-        await persistChit(chit);
+        await persistChit(tenantId, chit);
         return { status: "success" };
       }
 
       case "saveChitAuction": {
         const auctionObj = args[0] || {};
         const isOldHistory = !!args[1];
-        const { snap, chit } = await loadNanbanChit();
+        const { snap, chit } = await loadNanbanChit(tenantId);
         const d = getISTDateString();
         const id = String(Date.now());
         const expensesAmt = parseInt(auctionObj.expenses, 10) || 0;
@@ -1848,7 +2282,7 @@ async function handleErpRpc(action, rawArgs) {
               date: d
             });
           }
-          await persistChit(chit);
+          await persistChit(tenantId, chit);
         } else {
           let expensesList = Array.isArray(snap.expenses) ? [...snap.expenses] : [];
           if (commission > 0) {
@@ -1870,7 +2304,7 @@ async function handleErpRpc(action, rawArgs) {
             });
           }
           chit.bids = [];
-          await saveNanbanPartial({ chitData: chit, expenses: expensesList });
+          await saveNanbanPartial(tenantId, { chitData: chit, expenses: expensesList });
           const cfg = nanbanTemplateCfg_(snap);
           const members = chit.members.filter((m) => m.group === auctionObj.group);
           const winMsg = `📢 *சீட்டு ஏல முடிவு - Month ${auctionObj.monthNo}*\n\nகுழு: ${auctionObj.group}\n🏆 ஏலம் எடுத்தவர்: *${auctionObj.winner || "தகவல் இல்லை"}*\nதள்ளுபடி: ₹${auctionObj.discount}\n\nஇந்த மாதம் ஒவ்வொருவரும் கட்ட வேண்டிய தொகை: *₹${auctionObj.perHead}*\n\nதயவுசெய்து தொகையைச் செலுத்தவும். 🙏`;
@@ -1914,25 +2348,25 @@ async function handleErpRpc(action, rawArgs) {
 
       case "settleAuctionWinner": {
         const auctionId = args[0];
-        const { chit } = await loadNanbanChit();
+        const { chit } = await loadNanbanChit(tenantId);
         const auctions = chit.auctions.map((a) => ({ ...a }));
         const ix = auctions.findIndex((a) => String(a.id) === String(auctionId));
         if (ix < 0) return { status: "error", message: "Auction not found" };
         if (String(auctions[ix].status) === "Settled") return { status: "error", message: "Already settled" };
         auctions[ix] = { ...auctions[ix], status: "Settled" };
         chit.auctions = auctions;
-        await persistChit(chit);
+        await persistChit(tenantId, chit);
         await notifyAdminsText(tenantId, `🤝 *சீட்டு பட்டுவாடா நிறைவு*\n\nஏல எண்: ${auctionId}\nநிலை: Settled`);
         return { status: "success" };
       }
 
       case "deleteChitAuction": {
         const auctionId = args[0];
-        const { chit } = await loadNanbanChit();
+        const { chit } = await loadNanbanChit(tenantId);
         const before = chit.auctions.length;
         chit.auctions = chit.auctions.filter((a) => String(a.id) !== String(auctionId));
         if (chit.auctions.length === before) return { status: "error", message: "Auction not found" };
-        await persistChit(chit);
+        await persistChit(tenantId, chit);
         return { status: "success" };
       }
 
@@ -1942,7 +2376,7 @@ async function handleErpRpc(action, rawArgs) {
         if (payObj.phone && String(payObj.phone).length !== 10) {
           return { status: "error", message: "Invalid phone (10-digit required)" };
         }
-        const { chit } = await loadNanbanChit();
+        const { chit } = await loadNanbanChit(tenantId);
         const id = String(Date.now());
         const d = getISTDateString();
         chit.payments.unshift({
@@ -1954,7 +2388,7 @@ async function handleErpRpc(action, rawArgs) {
           date: d,
           phone: payObj.phone || ""
         });
-        await persistChit(chit);
+        await persistChit(tenantId, chit);
         const wa = waE164_(payObj.phone);
         if (wa) {
           const msg = `💰 வணக்கம் ${payObj.memberName},\nஉங்களின் இந்த மாத சீட்டுத் தொகை ₹${payObj.amount} பெறப்பட்டது. (வசூலர்: ${payObj.receiver})\nநன்றி! 🙏\n- நண்பன் சீட்டு நிறுவனம்`;
@@ -1979,7 +2413,7 @@ async function handleErpRpc(action, rawArgs) {
       case "sendChitBulkAlert": {
         const phonesArray = args[0] || [];
         const msgTemplate = String(args[1] || "");
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const cfg = nanbanTemplateCfg_(snap);
         let successCount = 0;
         let delay = 0;
@@ -2027,7 +2461,7 @@ async function handleErpRpc(action, rawArgs) {
 
       case "triggerLiveChitBidding": {
         const groupName = args[0];
-        const { chit } = await loadNanbanChit();
+        const { chit } = await loadNanbanChit(tenantId);
         const members = chit.members.filter((m) => m.group === groupName);
         const bidMsg = `📢 *சீட்டு ஏலம் ஆரம்பம்!*\n\nகுழு: ${groupName}\n\nஉங்களின் ஏலத் தொகையை (எ.கா: 15000) வாட்ஸ்அப்பில் ரிப்ளை செய்யவும். ஏலம் அரை மணி நேரத்தில் முடிவடையும்.`;
         let count = 0;
@@ -2050,7 +2484,7 @@ async function handleErpRpc(action, rawArgs) {
         const dateText = String(args[1] || "");
         const note = String(args[2] || "");
         const rawDate = String(args[3] || "");
-        const { chit } = await loadNanbanChit();
+        const { chit } = await loadNanbanChit(tenantId);
         const d = getISTDateString();
         if (rawDate) {
           const sched = Array.isArray(chit.schedule) ? [...chit.schedule] : [];
@@ -2062,14 +2496,14 @@ async function handleErpRpc(action, rawArgs) {
           if (si >= 0) sched[si] = row;
           else sched.push(row);
           chit.schedule = sched;
-          await persistChit(chit);
+          await persistChit(tenantId, chit);
         }
         const pastAuctions = chit.auctions.filter((a) => a.group === groupName);
         const nextAucNo = pastAuctions.length + 1;
         const aucNoStr = `${nextAucNo}வது`;
         const noteStr = note ? `\n\n📌 குறிப்பு: ${note}` : "";
         const members = chit.members.filter((m) => m.group === groupName);
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const cfg = nanbanTemplateCfg_(snap);
         let count = 0;
         let delay = 0;
@@ -2113,14 +2547,14 @@ async function handleErpRpc(action, rawArgs) {
 
       case "getMemberChitPassbook": {
         const name = args[0];
-        const { chit } = await loadNanbanChit();
+        const { chit } = await loadNanbanChit(tenantId);
         return buildMemberChitPassbook(name, chit);
       }
 
       case "fixAllHistoricalChitPayments": {
-        const { chit } = await loadNanbanChit();
+        const { chit } = await loadNanbanChit(tenantId);
         const { chit: fixed, fixes } = fixHistoricalChitPayments(chit);
-        await persistChit(fixed);
+        await persistChit(tenantId, fixed);
         return { status: "success", message: `${fixes} payments were fixed and marked as Paid! ✅` };
       }
 
@@ -2131,7 +2565,7 @@ async function handleErpRpc(action, rawArgs) {
         const officeAmt = args[3];
         const loggedBy = String(args[4] || "");
         if (!monthKey) return { status: "error", message: "Month required" };
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const appSettings = snap.appSettings && typeof snap.appSettings === "object" ? { ...snap.appSettings } : {};
         if (!appSettings.appSettings) appSettings.appSettings = {};
         if (!appSettings.appSettings.cashOpeningByMonth) appSettings.appSettings.cashOpeningByMonth = {};
@@ -2141,7 +2575,7 @@ async function handleErpRpc(action, rawArgs) {
           office: parseInt(officeAmt, 10) || 0,
           by: loggedBy
         };
-        await saveNanbanPartial({ appSettings });
+        await saveNanbanPartial(tenantId, { appSettings });
         return { status: "success" };
       }
 
@@ -2173,7 +2607,7 @@ async function handleErpRpc(action, rawArgs) {
         if (raw.length === 10) raw = `91${raw}`;
         if (raw.length < 12) return { status: "error", message: "Enter valid 10-digit mobile" };
 
-        const snap = await getBusinessSnapshotDoc("Nanban");
+        const snap = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
         const cfg = nanbanTemplateCfg_(snap);
         const name = "சோதனை மாணவர்";
         const dateStr = getISTDateString();
@@ -2254,7 +2688,7 @@ async function handleErpRpc(action, rawArgs) {
           await sendTpl(tplQuiz, "ta", ["1", name, qText, optA, optB, optC], fb);
 
           const phone10Quiz = normPhone10(raw);
-          const snapQ = await getBusinessSnapshotDoc("Nanban");
+          const snapQ = await getBusinessSnapshotDoc(nanbanBusinessDocIdForTenant(tenantId));
           let stu = Array.isArray(snapQ.students) ? snapQ.students.map((x) => ({ ...x })) : [];
           const stuIdx = stu.findIndex((s) => normPhone10(s.phone) === phone10Quiz);
           if (stuIdx >= 0) {
@@ -2263,7 +2697,7 @@ async function handleErpRpc(action, rawArgs) {
             st.quizPendingQueue.push({ quizDay: 1, correctNo });
             if (st.quizPendingQueue.length > 15) st.quizPendingQueue = st.quizPendingQueue.slice(-15);
             stu[stuIdx] = st;
-            await saveNanbanPartial({ students: stu });
+            await saveNanbanPartial(tenantId, { students: stu });
           }
         } else if (kind === "chit_alert") {
           const tpl = cfg.chitDueTemplate || "chit_due_reminder";
@@ -2337,6 +2771,13 @@ async function handleErpRpc(action, rawArgs) {
         };
     }
   } catch (e) {
+    if (e && e.code === "trial_expired") {
+      return {
+        status: "error",
+        code: "trial_expired",
+        message: "Your free trial has ended. Please subscribe to continue editing data."
+      };
+    }
     const em = String(e && e.message ? e.message : e);
     console.error(`NANBAN_ERP_RPC_TOP_CATCH action=${act} ${em}`);
     return { status: "error", message: em };
