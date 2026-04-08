@@ -124,9 +124,43 @@ function waE164_(phone) {
 }
 
 const SCHOOL_REG_OTP_PEPPER = String(process.env.SCHOOL_REG_OTP_PEPPER || "nanban_school_reg_otp_v1");
+const ADMIN_PHONE_EDIT_OTP_PEPPER = String(
+  process.env.ADMIN_PHONE_EDIT_OTP_PEPPER || "nanban_admin_phone_edit_otp_v1"
+);
 
 function hashSchoolRegOtp_(code6) {
   return crypto.createHash("sha256").update(`${SCHOOL_REG_OTP_PEPPER}:${String(code6 || "").trim()}`).digest("hex");
+}
+
+function hashAdminPhoneEditOtp_(code6) {
+  return crypto
+    .createHash("sha256")
+    .update(`${ADMIN_PHONE_EDIT_OTP_PEPPER}:${String(code6 || "").trim()}`)
+    .digest("hex");
+}
+
+function adminPhoneEditFirestoreDocId_(tenantId) {
+  return String(tenantId || "nanban_main")
+    .trim()
+    .replace(/[/\\]/g, "_")
+    .slice(0, 120);
+}
+
+/** First India mobile (10 digits) from comma / semicolon separated admin alert string. */
+function firstPhone10FromAdminAlertString_(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  const chunks = s.split(/[,;|]/);
+  for (const chunk of chunks) {
+    let d = String(chunk || "").replace(/\D/g, "");
+    if (d.length >= 10) {
+      if (d.length > 10) d = d.slice(-10);
+      if (d.length === 10) return d;
+    }
+  }
+  const all = s.replace(/\D/g, "");
+  if (all.length >= 10) return all.slice(-10);
+  return "";
 }
 
 function randomSixDigitOtp_() {
@@ -571,6 +605,114 @@ async function handleErpRpc(action, rawArgs) {
         return { status: "success", schools };
       }
 
+      case "sendOtpToExistingAdmin": {
+        const bid = nanbanBusinessDocIdForTenant(tenantId);
+        const snap = await getBusinessSnapshotDoc(bid);
+        const inner = drivingSchoolInnerFromSnap_(snap);
+        const raw = String(inner.trainerAlertPhone || inner.adminPhone || "").trim();
+        const phone10 = firstPhone10FromAdminAlertString_(raw);
+        if (!phone10) {
+          return {
+            status: "error",
+            message: "No saved admin WhatsApp number found. Save a number first, then you can protect changes with OTP."
+          };
+        }
+        const db = admin.firestore();
+        const docId = adminPhoneEditFirestoreDocId_(tenantId);
+        const otpRef = db.collection("admin_phone_edit_otps").doc(docId);
+        const existing = await otpRef.get();
+        if (existing.exists) {
+          const c = (existing.data() || {}).created_at;
+          if (c && typeof c.toMillis === "function" && Date.now() - c.toMillis() < 55 * 1000) {
+            return { status: "error", message: "Please wait about a minute before requesting another OTP." };
+          }
+        }
+        const plain = randomSixDigitOtp_();
+        const codeHash = hashAdminPhoneEditOtp_(plain);
+        const now = Date.now();
+        await otpRef.set(
+          {
+            code_hash: codeHash,
+            expires_at: admin.firestore.Timestamp.fromMillis(now + 5 * 60 * 1000),
+            attempts: 0,
+            target_phone10: phone10,
+            created_at: admin.firestore.FieldValue.serverTimestamp()
+          },
+          { merge: false }
+        );
+        const waTo = waE164_(phone10);
+        if (!waTo) {
+          await otpRef.delete().catch(() => {});
+          return { status: "error", message: "Invalid phone for WhatsApp." };
+        }
+        const otpMsg =
+          `🔐 *Nanban ERP — Admin number change*\n\n` +
+          `Someone requested to edit admin/partner alert numbers.\n` +
+          `OTP: *${plain}*\n` +
+          `Valid 5 minutes. If this wasn’t you, ignore this message.`;
+        try {
+          await enqueueWaOutboundSend(
+            {
+              tenantId,
+              to: waTo,
+              message: otpMsg,
+              messageType: "text",
+              metadata: { kind: "admin_phone_edit_otp", tenant_id: docId }
+            },
+            { delaySeconds: 0 }
+          );
+        } catch (waErr) {
+          console.error(`ADMIN_PHONE_OTP_WA_FAILED ${String(waErr && waErr.message ? waErr.message : waErr)}`);
+          await otpRef.delete().catch(() => {});
+          return {
+            status: "error",
+            message: "Could not send OTP on WhatsApp. Try again later."
+          };
+        }
+        const masked = phone10.length >= 4 ? `••••${phone10.slice(-4)}` : "••••";
+        return { status: "success", message: "OTP sent to WhatsApp.", expires_in_sec: 300, masked_phone: masked };
+      }
+
+      case "verifyAdminPhoneEditOtp": {
+        const otpPlain = String(args[0] || "")
+          .trim()
+          .replace(/\D/g, "");
+        if (otpPlain.length !== 6) {
+          return { status: "error", message: "Enter the 6-digit OTP." };
+        }
+        const db = admin.firestore();
+        const docId = adminPhoneEditFirestoreDocId_(tenantId);
+        const otpRef = db.collection("admin_phone_edit_otps").doc(docId);
+        const otpSnap = await otpRef.get();
+        if (!otpSnap.exists) {
+          return { status: "error", message: "No active OTP. Tap Edit to request one." };
+        }
+        const od = otpSnap.data() || {};
+        const exp = od.expires_at;
+        if (exp && typeof exp.toMillis === "function" && exp.toMillis() < Date.now()) {
+          await otpRef.delete().catch(() => {});
+          return { status: "error", message: "OTP expired. Request a new one." };
+        }
+        const attempts = parseInt(od.attempts, 10) || 0;
+        if (attempts >= 8) {
+          await otpRef.delete().catch(() => {});
+          return { status: "error", message: "Too many wrong attempts. Request a new OTP." };
+        }
+        const expectedHash = String(od.code_hash || "");
+        const gotHash = hashAdminPhoneEditOtp_(otpPlain);
+        if (!timingSafeEqualStr_(expectedHash, gotHash)) {
+          await otpRef.set({ attempts: attempts + 1 }, { merge: true });
+          return { status: "error", message: "Wrong OTP. Try again." };
+        }
+        await otpRef.delete().catch(() => {});
+        const unlockRef = db.collection("admin_phone_edit_unlock").doc(docId);
+        await unlockRef.set({
+          expires_at: admin.firestore.Timestamp.fromMillis(Date.now() + 10 * 60 * 1000),
+          created_at: admin.firestore.FieldValue.serverTimestamp()
+        });
+        return { status: "success", message: "Verified. You can edit the number now." };
+      }
+
       case "registerNewDrivingSchool": {
         const idToken = String(args[0] || "").trim();
         const schoolName = String(args[1] || "").trim().slice(0, 120);
@@ -784,6 +926,34 @@ async function handleErpRpc(action, rawArgs) {
               ? { ...appSettings.appSettings }
               : {};
           const incoming = val && typeof val === "object" ? val : {};
+          const normAlert = (s) => String(s || "").replace(/\s/g, "");
+          const prevPhone = normAlert(prevInner.trainerAlertPhone);
+          const nextPhone = normAlert(
+            incoming.trainerAlertPhone !== undefined && incoming.trainerAlertPhone !== null
+              ? incoming.trainerAlertPhone
+              : prevInner.trainerAlertPhone
+          );
+          if (prevPhone && nextPhone !== prevPhone) {
+            const db = admin.firestore();
+            const unlockId = adminPhoneEditFirestoreDocId_(tenantId);
+            const unlockRef = db.collection("admin_phone_edit_unlock").doc(unlockId);
+            const uSnap = await unlockRef.get();
+            if (!uSnap.exists) {
+              return {
+                status: "error",
+                message: "Verify OTP on the saved WhatsApp number before changing admin alert numbers."
+              };
+            }
+            const ue = (uSnap.data() || {}).expires_at;
+            if (ue && typeof ue.toMillis === "function" && ue.toMillis() < Date.now()) {
+              await unlockRef.delete().catch(() => {});
+              return {
+                status: "error",
+                message: "Verification expired. Tap Edit and complete OTP again."
+              };
+            }
+            await unlockRef.delete().catch(() => {});
+          }
           appSettings.appSettings = { ...prevInner, ...incoming };
         } else if (key === "serviceSplits") appSettings.serviceSplits = val || {};
         else if (key === "vehicleKm") appSettings.vehicleKm = val || {};

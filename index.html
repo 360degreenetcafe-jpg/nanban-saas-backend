@@ -2564,6 +2564,27 @@
     </div>
 </div>
 
+<div id="adminPhoneOtpModal" class="modal-overlay" style="z-index: 3200;">
+    <div class="modal-content" style="max-width: 420px; background: white; border-radius: 20px; padding: 24px;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px;">
+            <h3 style="margin:0; color:var(--primary); font-size:17px;">🔐 Admin numbers — OTP</h3>
+            <button type="button" onclick="closeAdminPhoneOtpModal_()" style="background:none; border:none; font-size:22px; cursor:pointer; line-height:1;">×</button>
+        </div>
+        <p id="adminPhoneOtpHint" style="font-size:12px; color:var(--text-muted); margin:0 0 14px; line-height:1.45;">
+            A 6-digit code was sent to the saved WhatsApp number (ending <span id="adminPhoneOtpMasked">••••</span>).
+        </p>
+        <label style="font-size:11px; font-weight:800;">OTP (6 digits)</label>
+        <input type="tel" inputmode="numeric" id="adminPhoneOtpInput" maxlength="6" placeholder="______" autocomplete="one-time-code"
+            style="width:100%; margin:6px 0 16px; padding:14px; font-size:20px; font-weight:900; letter-spacing:0.4em; text-align:center; border-radius:12px; border:2px solid var(--border); box-sizing:border-box;"
+            oninput="this.value=this.value.replace(/\D/g,'').slice(0,6);">
+        <div style="display:flex; flex-wrap:wrap; gap:10px;">
+            <button type="button" class="btn btn-p" style="flex:1; min-width:120px; padding:12px;" onclick="submitAdminPhoneOtpVerify_()">Verify</button>
+            <button type="button" class="btn btn-w" style="flex:1; min-width:120px; padding:12px;" onclick="resendAdminPhoneOtp_()">Resend OTP</button>
+            <button type="button" class="btn btn-c" style="width:100%; padding:12px;" onclick="closeAdminPhoneOtpModal_()">Cancel</button>
+        </div>
+    </div>
+</div>
+
 <div id="editStudentModal" class="modal-overlay" style="z-index: 2500;">
     <div class="modal-content" style="max-width: 500px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; border-bottom:1px solid var(--border); padding-bottom:10px;">
@@ -4479,23 +4500,39 @@
 
                 <div id="settingsVehicleKmCard" class="glass-card" style="padding:25px; margin-bottom:20px; background:linear-gradient(to right, #eff6ff, #ffffff); border-left:8px solid var(--secondary);">
                     <h3 style="margin-top:0; color:var(--primary); font-size:15px;">🚗 Vehicle KM &amp; trainer</h3>
-                    <div class="flex-row" style="align-items:flex-end; flex-wrap:wrap; gap:10px;">
-                        <div>
-                            <label>Total KM</label>
-                            <input type="number" id="setVehKmCurrent" style="font-weight:bold; color:var(--primary); margin:0;">
+                    <div id="vehKmReadBlock" style="display:none; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; padding:12px 14px; background:#f8fafc; border-radius:14px; border:1px solid #e2e8f0;">
+                        <div style="font-weight:800; color:var(--primary); font-size:14px;">
+                            <span id="vehKmDisplayText">—</span>
                         </div>
-                        <div>
-                            <label>Service alert every (KM)</label>
-                            <input type="number" id="setVehKmTarget" placeholder="5000" style="margin:0;">
+                        <button type="button" class="btn btn-w" style="padding:8px 14px; font-size:12px;" onclick="beginEditVehicleKm_()" title="Edit">✏️ Edit</button>
+                    </div>
+                    <div id="vehKmEditBlock" style="display:none;">
+                        <div class="flex-row" style="align-items:flex-end; flex-wrap:wrap; gap:10px;">
+                            <div>
+                                <label>Total KM</label>
+                                <input type="number" id="setVehKmCurrent" style="font-weight:bold; color:var(--primary); margin:0;">
+                            </div>
+                            <div>
+                                <label>Service alert every (KM)</label>
+                                <input type="number" id="setVehKmTarget" placeholder="5000" style="margin:0;">
+                            </div>
+                            <button type="button" class="btn btn-p" style="padding:15px;" onclick="saveVehicleKmSettings()">💾 Save KM</button>
+                            <button type="button" class="btn btn-c" style="padding:15px;" onclick="cancelEditVehicleKm_()">Cancel</button>
                         </div>
-                        <button class="btn btn-w" style="padding:15px;" onclick="saveVehicleKmSettings()">💾 Save KM</button>
                     </div>
                     <div style="margin-top:18px;">
                         <label>Admin / partner WhatsApp alerts (comma-separated)</label>
                         <p style="font-size:11px; color:var(--text-muted); margin:4px 0 6px;">உதா: 919876543210, 918765432109 — அனைத்து அட்மிஷன் / விசாரணை / வரவு-செலவு அலர்ட்கள் இங்கே உள்ள எண்களுக்குச் செல்லும்.</p>
-                        <div style="display:flex; gap:10px; margin-top:6px;">
-                            <input type="text" id="trainerAlertNum" placeholder="919xxxxxxxxx, 918xxxxxxxxx" style="margin:0; flex:1;" maxlength="512" autocomplete="off">
-                            <button class="btn btn-p" style="padding:10px 20px;" onclick="saveTrainerAlertNum()">Save</button>
+                        <div id="trainerAlertReadBlock" style="display:none; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; padding:12px 14px; background:#fffbeb; border-radius:14px; border:1px solid #fde68a;">
+                            <div id="trainerAlertDisplayText" style="font-weight:800; color:#92400e; font-size:13px; word-break:break-all; flex:1;">—</div>
+                            <button type="button" class="btn btn-p" style="padding:8px 14px; font-size:12px;" onclick="beginEditAdminPhone_()" title="Edit (OTP)">✏️ Edit</button>
+                        </div>
+                        <div id="trainerAlertEditBlock" style="display:none;">
+                            <div style="display:flex; gap:10px; margin-top:6px; flex-wrap:wrap;">
+                                <input type="text" id="trainerAlertNum" placeholder="919xxxxxxxxx, 918xxxxxxxxx" style="margin:0; flex:1; min-width:200px;" maxlength="512" autocomplete="off">
+                                <button type="button" class="btn btn-p" style="padding:10px 20px;" onclick="saveTrainerAlertNum()">Save</button>
+                                <button type="button" class="btn btn-c" style="padding:10px 16px;" onclick="cancelEditAdminPhone_()">Cancel</button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -4709,6 +4746,164 @@
         };
     }
 
+    function maskAdminPhonesDisplay_(raw) {
+        var parts = String(raw || "")
+            .split(",")
+            .map(function(x) {
+                return x.trim();
+            })
+            .filter(Boolean);
+        if (!parts.length) return "";
+        return parts
+            .map(function(p) {
+                var d = p.replace(/\D/g, "");
+                if (d.length > 10) d = d.slice(-10);
+                if (d.length === 10) return "•••••" + d.slice(-4);
+                if (d.length >= 4) return "••••" + d.slice(-4);
+                return "••••";
+            })
+            .join(", ");
+    }
+
+    function syncSettingsSecurityViews_() {
+        ensureNanbanAppSettingsShape_();
+        var vk = appSettings.vehicleKm || { current: 0, nextService: 5000 };
+        var cur = parseInt(vk.current, 10) || 0;
+        var nxt = parseInt(vk.nextService, 10) || 5000;
+        setHTML(
+            "vehKmDisplayText",
+            "Total: " + cur.toLocaleString() + " km · Service alert: every " + nxt.toLocaleString() + " km"
+        );
+
+        var rawAlert = String(appSettings.appSettings.trainerAlertPhone || "").trim();
+        setHTML("trainerAlertDisplayText", rawAlert ? maskAdminPhonesDisplay_(rawAlert) : "(not set)");
+
+        var showVehEdit = !!settingsVehKmEditing_;
+        setDisplay("vehKmReadBlock", showVehEdit ? "none" : "flex");
+        setDisplay("vehKmEditBlock", showVehEdit ? "block" : "none");
+
+        var hasAlert = !!rawAlert;
+        var showAlertEdit = !hasAlert || !!settingsAdminPhoneUnlocked_;
+        setDisplay("trainerAlertReadBlock", hasAlert && !showAlertEdit ? "flex" : "none");
+        setDisplay("trainerAlertEditBlock", showAlertEdit ? "block" : "none");
+    }
+
+    function beginEditVehicleKm_() {
+        settingsVehKmEditing_ = true;
+        if (appSettings.vehicleKm) {
+            setVal("setVehKmCurrent", appSettings.vehicleKm.current);
+            setVal("setVehKmTarget", appSettings.vehicleKm.nextService);
+        }
+        syncSettingsSecurityViews_();
+    }
+
+    function cancelEditVehicleKm_() {
+        settingsVehKmEditing_ = false;
+        if (appSettings.vehicleKm) {
+            setVal("setVehKmCurrent", appSettings.vehicleKm.current);
+            setVal("setVehKmTarget", appSettings.vehicleKm.nextService);
+        }
+        syncSettingsSecurityViews_();
+    }
+
+    function beginEditAdminPhone_() {
+        ensureNanbanAppSettingsShape_();
+        var raw = String(appSettings.appSettings.trainerAlertPhone || "").trim();
+        if (!raw) {
+            settingsAdminPhoneUnlocked_ = true;
+            setVal("trainerAlertNum", "");
+            syncSettingsSecurityViews_();
+            return;
+        }
+        if (!nanbanNativeConfigured_()) {
+            settingsAdminPhoneUnlocked_ = true;
+            setVal("trainerAlertNum", raw);
+            syncSettingsSecurityViews_();
+            showToast("Hosted API not configured — editing without OTP.", "warning");
+            return;
+        }
+        showLoader("Sending OTP to saved number…");
+        apiCall_("sendOtpToExistingAdmin")
+            .then(function(res) {
+                hideLoader();
+                if (res && res.status === "success") {
+                    var m = (res && res.masked_phone) || "••••";
+                    var el = document.getElementById("adminPhoneOtpMasked");
+                    if (el) el.textContent = m;
+                    setVal("adminPhoneOtpInput", "");
+                    showModal("adminPhoneOtpModal");
+                } else {
+                    showToast((res && res.message) || "Could not send OTP", "danger");
+                }
+            })
+            .catch(function(e) {
+                hideLoader();
+                showToast(e && e.message ? e.message : String(e), "danger");
+            });
+    }
+
+    function closeAdminPhoneOtpModal_() {
+        closeModal("adminPhoneOtpModal");
+        setVal("adminPhoneOtpInput", "");
+    }
+
+    function resendAdminPhoneOtp_() {
+        if (!nanbanNativeConfigured_()) return;
+        showLoader("Resending OTP…");
+        apiCall_("sendOtpToExistingAdmin")
+            .then(function(res) {
+                hideLoader();
+                if (res && res.status === "success") {
+                    var m = (res && res.masked_phone) || "••••";
+                    var el = document.getElementById("adminPhoneOtpMasked");
+                    if (el) el.textContent = m;
+                    showToast("OTP sent again", "success");
+                } else {
+                    showToast((res && res.message) || "Resend failed", "danger");
+                }
+            })
+            .catch(function(e) {
+                hideLoader();
+                showToast(e && e.message ? e.message : String(e), "danger");
+            });
+    }
+
+    function submitAdminPhoneOtpVerify_() {
+        var otp = String(getVal("adminPhoneOtpInput") || "")
+            .trim()
+            .replace(/\D/g, "");
+        if (otp.length !== 6) {
+            showToast("Enter 6-digit OTP", "warning");
+            return;
+        }
+        showLoader("Verifying…");
+        apiCall_("verifyAdminPhoneEditOtp", otp)
+            .then(function(res) {
+                hideLoader();
+                if (res && res.status === "success") {
+                    settingsAdminPhoneUnlocked_ = true;
+                    setVal("trainerAlertNum", String(appSettings.appSettings.trainerAlertPhone || ""));
+                    closeAdminPhoneOtpModal_();
+                    syncSettingsSecurityViews_();
+                    showToast(res.message || "Verified — you can edit the numbers now.", "success");
+                    var ti = document.getElementById("trainerAlertNum");
+                    if (ti) try { ti.focus(); } catch (e2) {}
+                } else {
+                    showToast((res && res.message) || "Verification failed", "danger");
+                }
+            })
+            .catch(function(e) {
+                hideLoader();
+                showToast(e && e.message ? e.message : String(e), "danger");
+            });
+    }
+
+    function cancelEditAdminPhone_() {
+        settingsAdminPhoneUnlocked_ = false;
+        setVal("trainerAlertNum", String(appSettings.appSettings.trainerAlertPhone || ""));
+        syncSettingsSecurityViews_();
+    }
+
     function ensureNanbanClientState_() {
         if (!Array.isArray(studentsData)) studentsData = [];
         if (!Array.isArray(expensesData)) expensesData = [];
@@ -4871,7 +5066,9 @@
     // =========================================================================
     let studentsData = []; 
     let expensesData = []; 
-    let APP_USERS = []; 
+    let APP_USERS = [];
+    var settingsVehKmEditing_ = false;
+    var settingsAdminPhoneUnlocked_ = false; 
     let chitData = { groups: [], members: [], auctions: [], payments: [], bids: [] }; 
     
     let appSettings = { 
@@ -13355,7 +13552,12 @@
         receivers.forEach(function(r) { receiverOpts += '<option value="'+r+'">'+r+'</option>'; });
         setHTML('receiverFilter', receiverOpts);
         
-        if(appSettings.vehicleKm) { setVal('setVehKmCurrent', appSettings.vehicleKm.current); setVal('setVehKmTarget', appSettings.vehicleKm.nextService); } 
+        if (appSettings.vehicleKm) {
+            setVal("setVehKmCurrent", appSettings.vehicleKm.current);
+            setVal("setVehKmTarget", appSettings.vehicleKm.nextService);
+        }
+        setVal("trainerAlertNum", appSettings.appSettings.trainerAlertPhone || "");
+        syncSettingsSecurityViews_();
         setVal('setTemplateEnquiry', appSettings.appSettings.enquiryTemplate || 'enquiry_welcom');
         setVal('setTemplateWelcome', appSettings.appSettings.welcomeTemplate || 'welcome_admission');
         setVal('setTemplateLlrAdmission', appSettings.appSettings.llrAdmissionTemplate || 'welcome_admission');
@@ -13373,7 +13575,6 @@
         setVal('setGoogleReviewLink', appSettings.appSettings.googleReviewLink || '');
         setVal('setRtoReminderText', appSettings.appSettings.rtoReminderText || '');
         setVal('setQuizHeaderImageUrl', appSettings.appSettings.quizHeaderImageUrl || '');
-        setVal('trainerAlertNum', appSettings.appSettings.trainerAlertPhone || '');
         setVal('dsProfileSchoolName', appSettings.appSettings.schoolName || '');
         setVal('dsProfileSchoolAddress', appSettings.appSettings.schoolAddress || '');
         setVal('dsProfileContactPhone', appSettings.appSettings.contactPhone || '');
@@ -13503,7 +13704,36 @@
         setVal('esSetGstRate', esevaiData.settings.gst_rate || '');
     }
 
-    function saveVehicleKmSettings() { let curr = parseInt(getVal('setVehKmCurrent')) || 0; let nxt = parseInt(getVal('setVehKmTarget')) || 5000; appSettings.vehicleKm = { current: curr, lastService: curr, nextService: nxt }; google.script.run.withSuccessHandler(function() { showToast("Vehicle KM Updated!"); }).saveAppSettings("vehicleKm", appSettings.vehicleKm); }
+    function saveVehicleKmSettings() {
+        var curr = parseInt(getVal("setVehKmCurrent"), 10) || 0;
+        var nxt = parseInt(getVal("setVehKmTarget"), 10) || 5000;
+        appSettings.vehicleKm = { current: curr, lastService: curr, nextService: nxt };
+        function ok() {
+            settingsVehKmEditing_ = false;
+            showToast("Vehicle KM updated! ✅");
+            renderDynamicSettings();
+        }
+        function fail(msg) {
+            showToast(msg || "Save failed", "danger");
+        }
+        if (nanbanNativeConfigured_()) {
+            apiCall_("saveAppSettings", "vehicleKm", appSettings.vehicleKm)
+                .then(function(r) {
+                    if (r && r.status === "success") ok();
+                    else fail((r && r.message) || "Save failed");
+                })
+                .catch(function(e) {
+                    fail(e && e.message ? e.message : String(e));
+                });
+            return;
+        }
+        google.script.run
+            .withSuccessHandler(ok)
+            .withFailureHandler(function(err) {
+                fail(err && err.message ? err.message : String(err));
+            })
+            .saveAppSettings("vehicleKm", appSettings.vehicleKm);
+    }
 
     function openServiceEdit(name) {
         let ss = (appSettings && appSettings.serviceSplits && appSettings.serviceSplits[name]) ? appSettings.serviceSplits[name] : {};
@@ -13706,6 +13936,7 @@
         appSettings.appSettings.adminPhone = appSettings.appSettings.trainerAlertPhone;
         function doneOk() {
             if (btn) { btn.innerText = oldText; btn.disabled = false; }
+            settingsAdminPhoneUnlocked_ = false;
             showToast("Admin alert numbers saved! ✅");
             renderDynamicSettings();
         }
