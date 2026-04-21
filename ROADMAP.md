@@ -4,6 +4,32 @@
 
 **Last updated:** April 2026
 
+**How to read this file:** Everything below is **in scope for the product** unless explicitly marked optional. Phases are **delivery order and focus**, not “we will not build” the rest. Use this as the single place to see *all futures* in one map.
+
+---
+
+## Full product surface (feature map)
+
+These are the major capability areas. Items ship across phases; many foundations already exist in `functions/` and the hosted UI.
+
+| Area | What “done” looks like | Primary code / entry (indicative) |
+|------|------------------------|-------------------------------------|
+| **Driving school ERP** | Students, fees/expenses, RTO services, fleet (vehicle, fuel, service logs), chits, daily triggers — usable on mobile and hosted. | `erpRpcDispatch.js`, `gode.gs` parity reference |
+| **Identity & tenant** | Invited staff/partners: Google login resolves to tenant; soft-deactivate respected; formal owner link where needed. | `resolveHostedGoogleLoginUserAction`, `linkInvitedUserToAuthUidAction`, team actions |
+| **Team & access** | Add/update PIN, deactivate/reactivate, role expectations documented for sensitive exports (roadmap: RBAC hardening). | `addTeamMemberAction`, `deactivateTeamMemberAction`, … |
+| **Contacts** | Post-OAuth contact sync for supported flows; predictable errors and retries. | `googleContactsOAuth.js`, `contactSyncService.js` |
+| **Hosted reports & PDF** | Audit, cashbook, monthly pack, filing index — print + download; Tamil-safe output; filing metadata persisted for hosted. | `nanbanHostedReportsPdf.js`, `erpRpcDispatch.js` PDF RPCs |
+| **E‑Sevai** | Customers, agents, ledger, services, enquiries, transactions, day close, openings, WA bill notify — My Bill Book–style parity over time. | E‑Sevai `save*` / `closeESevaiDayAction` RPCs |
+| **GST / tax (E‑Sevai)** | GSTIN, line GST, period summaries; full GSTR automation optional later program. | Settings + report builders (phased) |
+| **WhatsApp core** | Templates sync, outbound queue, idempotency, native job processing, tenant branding. | `waTemplateConfig`, `waOutboundQueue`, `waNativeJobProcessor`, `tenantMessagingBrand` |
+| **WhatsApp rich flows** | Interactive menus, student assistant config, quiz inbound, smart replies, PDF outbound + storage where applicable. | `whatsappInteractiveMenus`, `studentWaAssistant`, `nanbanQuizInbound`, `waPdfOutbound` |
+| **RTO / training aids** | Checklist definitions, quiz banks (incl. heavy vehicle topics), optional LLR capture helpers — integrated where product needs them. | `rtoChecklistDef`, `heavyVehicleQuizBank`, `llrVisionExtract` |
+| **SaaS & commercial** | Tenant billing updates, payment recording, activity/session signals for ops. | `updateSaaSTenantBillingAction`, `recordSaaSPaymentAction`, `dynamicPricingEngine` |
+| **Admin & reliability** | Admin notify, phone resolve, DLQ/ops routes, crons, structured logging. | `adminNotify`, `scheduledCrons`, DLQ routes |
+| **PWA / static shell** | Manifest, SW, SEO basics, hosted `index.html` alignment with native integration. | `public/*`, `index.html` |
+
+Optional or **explicitly later** programs (still on the map, not cancelled): super-admin multi-tenant console, full GSTR filing automation, deep inventory beyond current E‑Sevai scope.
+
 ---
 
 ## Phase 0 — Foundation (2–4 weeks, ongoing)
@@ -99,5 +125,6 @@
 ## How to use this document
 
 - Treat phases as **planning horizons**, not fixed deadlines.  
+- The **feature map** is the catalogue of *everything we intend*; phases only sequence *when we stress-test and harden* each stream.  
 - Re-prioritise after each production release based on customer pain (support tickets, revenue, compliance).  
 - Keep **one source of truth** for dates: update the “Last updated” line when this file changes.
