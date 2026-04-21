@@ -370,6 +370,12 @@ const RPC_OWNER_ADMIN_ACTIONS = new Set([
   "testContactSyncAction",
   "processFundTransfer",
   "saveCashOpeningAction",
+  /** Nanban hosted reports: financial exports + filing URLs (Staff/Trainer blocked). */
+  "generateFilingIndexPdfAction",
+  "generateFullAuditPdfAction",
+  "generateMonthlyCashbookPdfAction",
+  "generateMonthlyPdfPackAction",
+  "getFilingEntriesAction",
   "fixAllHistoricalChitPayments",
   "closeESevaiDayAction",
   "saveESevaiCustomerAction",

@@ -13985,6 +13985,10 @@
                     err =
                         "Tenant பொருந்தவில்லை — PIN மட்டும் உள்ளே வந்துள்ளீர்கள் எனில் logout செய்து மேலே Google login செய்யவும்; அல்லது வேறு பள்ளிக்கான சேவ் முயற்சிகளில் Settings-ல் உள்ள சரியான school code சரிபார்க்கவும்.";
                 }
+                if (String(err).indexOf("owner_or_admin_required") !== -1) {
+                    err =
+                        "அறிக்கை / PDF / Filing — Owner அல்லது Admin அனுமதி மட்டுமே. Staff/Trainer-க்கு இந்த பதிவிறக்கம் தடை.";
+                }
                 throw new Error(err || 'rpc_failed');
             }
             return o.j.result;
