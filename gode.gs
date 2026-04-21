@@ -2832,6 +2832,7 @@ function getAppUsers(tenantId) {
         let seen = {};
         Object.keys(rows || {}).forEach(function(k) {
             let d = rows[k] || {};
+            if (d.inactive_team_member === true) return;
             if (!d.name) return;
             let roleVal = String(d.role || "Staff").trim();
             let nameVal = String(d.name || "").trim();
@@ -3076,14 +3077,16 @@ function ensureFilingSheet() {
     return sh;
 }
 
-function logFilingEntry(monthKey, reportType, url, metaObj) {
+function logFilingEntry(monthKey, reportType, url, metaObj, actorOverride) {
     try {
         let sh = ensureFilingSheet();
         let ts = new Date();
         let d = getISTDate();
         let t = Utilities.formatDate(ts, "GMT+5:30", "HH:mm:ss");
-        let actor = "";
-        try { actor = Session.getActiveUser().getEmail() || ""; } catch (e) { actor = ""; }
+        let actor = String(actorOverride || "").trim();
+        if (!actor) {
+            try { actor = Session.getActiveUser().getEmail() || ""; } catch (e) { actor = ""; }
+        }
         let meta = "";
         try { meta = metaObj ? JSON.stringify(metaObj) : ""; } catch (e) { meta = ""; }
         sh.appendRow([d, t, String(monthKey || ""), String(reportType || ""), String(url || ""), meta, actor]);
@@ -3091,7 +3094,7 @@ function logFilingEntry(monthKey, reportType, url, metaObj) {
     } catch (e) {}
 }
 
-function generatePdfReportFromHtml(html, fileName, reportType, monthKey, metaObj) {
+function generatePdfReportFromHtml(html, fileName, reportType, monthKey, metaObj, actorOverride) {
     try {
         let safeName = String(fileName || "Nanban_Report.pdf").trim();
         if (!safeName.toLowerCase().endsWith(".pdf")) safeName += ".pdf";
@@ -3103,7 +3106,7 @@ function generatePdfReportFromHtml(html, fileName, reportType, monthKey, metaObj
         file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
         let fileId = file.getId();
         let url = getDrivePdfDownloadUrl(fileId);
-        try { logFilingEntry(monthKey || "", reportType || "Report", url, metaObj || {}); } catch (e) {}
+        try { logFilingEntry(monthKey || "", reportType || "Report", url, metaObj || {}, actorOverride); } catch (e) {}
         try { logAuditEvent('GENERATE_PDF', 'Report', fileId, "", url, { reportType: reportType || "", month: monthKey || "" }); } catch (e) {}
         return { status: "success", id: fileId, url: url };
     } catch (e) {
@@ -3419,7 +3422,7 @@ function getFilingEntriesAction(monthKey) {
     }
 }
 
-function generateFilingIndexPdfAction(monthKey) {
+function generateFilingIndexPdfAction(monthKey, actorHint) {
     try {
         let mk = String(monthKey || "").trim();
         let res = getFilingEntriesAction(mk);
@@ -3454,7 +3457,7 @@ function generateFilingIndexPdfAction(monthKey) {
                 </table>
             </body></html>
         `;
-        return generatePdfReportFromHtml(html, `Filing_Index_${mk || 'All'}.pdf`, 'FilingIndex', mk || '', { count: items.length });
+        return generatePdfReportFromHtml(html, `Filing_Index_${mk || 'All'}.pdf`, 'FilingIndex', mk || '', { count: items.length }, actorHint);
     } catch (e) {
         return { status: 'error', message: e.toString() };
     }
@@ -6285,7 +6288,7 @@ function updateMarksInBackground(phone, isCorrect) {
             if (isCorrect) {
                 foundStudent.quizStats.correct = (parseInt(foundStudent.quizStats.correct) || 0) + 1;
                 foundStudent.marks = (parseInt(foundStudent.marks) || 0) + 1; 
-                foundStudent.quizMarks = (parseInt(foundStudent.quizMarks) || 0) + 1;
+                foundStudent.quizMarks = (parseInt(foundStudent.quizMarks) || 0) + 5;
             }
             
             // Add automated remark for tracking
@@ -6427,18 +6430,20 @@ function processTrainerEntry(studentId, type, att, perf, amt, trainer) {
                  sendWhatsAppMessage(s.phone, `🚫 வணக்கம் ${s.name}, இன்று நீங்கள் பயிற்சிக்கு வரவில்லை என பதிவாகியுள்ளது.`);
             } else {
                 if (att > 0) {
-                    let nextDay = s.classesAttended + 1; 
+                    let totalAfter = parseInt(s.classesAttended) || 0;
+                    let nextDay = totalAfter + 1; 
                     let syllabusText = (nextDay <= 15) ? CAR_SYLLABUS[nextDay - 1] : "அனைத்து பயிற்சிகளும் முடிந்தது! இனி டெஸ்டுக்குத் தயாராகலாம்."; 
                     
                     let cfg = getTemplateAndReminderConfig();
+                    // {{2}} = cumulative classes completed (1–15), not sessions today (often 1)
                     let dailyRes = sendTemplateWithParamFallback(
                         s.phone,
                         cfg.dailyClassTemplate || "daily_class_alert",
-                        [[String(s.name || "-"), String(att || 1), String(perf || "-"), String(syllabusText || "-")], [String(s.name || "-")]],
+                        [[String(s.name || "-"), String(totalAfter || 0), String(perf || "-"), String(syllabusText || "-")], [String(s.name || "-")]],
                         null
                     );
                     if (!dailyRes || dailyRes.status === 'error') {
-                        sendWhatsAppMessage(s.phone, `🚗 வணக்கம் ${s.name}, இன்று உங்கள் ${att} வகுப்பு முடிந்தது. செயல்பாடு: ${perf}\n\n📅 நாளைக்கான பயிற்சி: ${syllabusText}`);
+                        sendWhatsAppMessage(s.phone, `🚗 வணக்கம் ${s.name}, மொத்தம் ${totalAfter} கிளாஸ் முடிந்தது (இன்று ${att}). செயல்பாடு: ${perf}\n\n📅 நாளைக்கான பயிற்சி: ${syllabusText}`);
                     }
                     
                     if (s.classesAttended === 15 && s.feedbackSent !== true) {
@@ -6459,7 +6464,7 @@ function processTrainerEntry(studentId, type, att, perf, amt, trainer) {
             Logger.log("Trainer Notify Error: " + msgErr.toString());
         }
         
-        return { status: 'success' };
+        return { status: 'success', student: s };
     } catch(e) { 
         return { status: 'error', message: e.toString() }; 
     }
@@ -6533,9 +6538,6 @@ function processDayCloseHandover(trainer, receiver, expAmt, expDesc, runKm, test
             let props = PropertiesService.getScriptProperties();
             props.setProperty('NANBAN_KM_TODAY_DATE', today);
             props.setProperty('NANBAN_KM_TODAY_VALUE', String(parseInt(runKm) || 0));
-            props.setProperty('NANBAN_KM_SESSION_DATE', today);
-            props.setProperty('NANBAN_KM_SESSION_ACTIVE', '0');
-            props.setProperty('NANBAN_KM_SESSION_END', String(parseInt(runKm) || 0));
         } catch (e) {}
 
         let settings = getAppSettings(); 
@@ -6696,73 +6698,6 @@ function getKmTodayAction() {
         return { status: 'success', km: km };
     } catch (e) {
         return { status: 'error', km: 0, message: e.toString() };
-    }
-}
-
-function getTrainerKmSessionAction() {
-    try {
-        let today = getISTDate();
-        let props = PropertiesService.getScriptProperties();
-        let dt = props.getProperty('NANBAN_KM_SESSION_DATE') || '';
-        let active = (props.getProperty('NANBAN_KM_SESSION_ACTIVE') || '0') === '1';
-        let startKm = parseInt(props.getProperty('NANBAN_KM_SESSION_START') || '0') || 0;
-        let startedBy = props.getProperty('NANBAN_KM_SESSION_BY') || '';
-        let endKm = parseInt(props.getProperty('NANBAN_KM_SESSION_END') || '0') || 0;
-
-        if (dt !== today) {
-            return { status: 'success', active: false, date: today, startKm: 0, startedBy: '', endKm: 0 };
-        }
-
-        if (!active || startKm <= 0) {
-            return { status: 'success', active: false, date: today, startKm: 0, startedBy: startedBy, endKm: endKm };
-        }
-
-        return { status: 'success', active: true, date: today, startKm: startKm, startedBy: startedBy, endKm: endKm };
-    } catch (e) {
-        return { status: 'error', message: e.toString(), active: false, startKm: 0 };
-    }
-}
-
-function startTrainerKmSessionAction(startKm, trainerName) {
-    try {
-        let today = getISTDate();
-        let st = parseInt(startKm) || 0;
-        if (st <= 0) return { status: 'error', message: 'Invalid Start KM' };
-
-        let props = PropertiesService.getScriptProperties();
-        let dt = props.getProperty('NANBAN_KM_SESSION_DATE') || '';
-        let active = (props.getProperty('NANBAN_KM_SESSION_ACTIVE') || '0') === '1';
-        let existing = parseInt(props.getProperty('NANBAN_KM_SESSION_START') || '0') || 0;
-        let by = props.getProperty('NANBAN_KM_SESSION_BY') || '';
-
-        if (dt === today && active && existing > 0) {
-            return { status: 'exists', date: today, active: true, startKm: existing, startedBy: by };
-        }
-
-        props.setProperty('NANBAN_KM_SESSION_DATE', today);
-        props.setProperty('NANBAN_KM_SESSION_ACTIVE', '1');
-        props.setProperty('NANBAN_KM_SESSION_START', String(st));
-        props.setProperty('NANBAN_KM_SESSION_BY', String(trainerName || 'Trainer'));
-        props.setProperty('NANBAN_KM_SESSION_END', '0');
-
-        return { status: 'success', date: today, active: true, startKm: st, startedBy: String(trainerName || 'Trainer') };
-    } catch (e) {
-        return { status: 'error', message: e.toString() };
-    }
-}
-
-function clearTrainerKmSessionAction() {
-    try {
-        let today = getISTDate();
-        let props = PropertiesService.getScriptProperties();
-        props.setProperty('NANBAN_KM_SESSION_DATE', today);
-        props.setProperty('NANBAN_KM_SESSION_ACTIVE', '0');
-        props.setProperty('NANBAN_KM_SESSION_START', '0');
-        props.setProperty('NANBAN_KM_SESSION_BY', '');
-        props.setProperty('NANBAN_KM_SESSION_END', '0');
-        return { status: 'success' };
-    } catch (e) {
-        return { status: 'error', message: e.toString() };
     }
 }
 
@@ -9108,6 +9043,7 @@ function saveESevaiCustomerAction(c, tenantId) {
                     id: id,
                     name: c.name,
                     phone: c.phone,
+                    address: String(c.address || "").trim(),
                     balance: Number(c.oldBalance) || 0,
                     type: c.type || "Direct",
                     created_at: getISTDate()
@@ -9122,7 +9058,7 @@ function saveESevaiCustomerAction(c, tenantId) {
         let db = getDB();
         let sheet = db.getSheetByName(ESEVAI_CUSTOMERS_SHEET);
         let id = "ESC" + Date.now();
-        sheet.appendRow([id, c.name, c.phone, Number(c.oldBalance) || 0, c.type]);
+        sheet.appendRow([id, c.name, c.phone, Number(c.oldBalance) || 0, c.type, String(c.address || "")]);
         return firebaseWarn
             ? { status: 'success', id: id, warning: "Firebase sync failed. Saved to Sheets fallback.", firebaseError: firebaseWarn }
             : { status: 'success', id: id };

@@ -41,10 +41,24 @@ async function appendNanbanFilingEntry(tenantId, { monthKey, reportType, url, me
  */
 async function listNanbanFilingEntries(tenantId, monthKey) {
   const mk = String(monthKey || "").trim();
-  const snap = await filingCol_(tenantId)
-    .where("monthKey", "==", mk)
-    .limit(250)
-    .get();
+  let snap;
+  try {
+    snap = await filingCol_(tenantId)
+      .where("monthKey", "==", mk)
+      .orderBy("createdAt", "desc")
+      .limit(250)
+      .get();
+  } catch (e) {
+    const msg = String(e && e.message ? e.message : e);
+    if (msg.includes("index") || msg.includes("FAILED_PRECONDITION")) {
+      snap = await filingCol_(tenantId)
+        .where("monthKey", "==", mk)
+        .limit(250)
+        .get();
+    } else {
+      throw e;
+    }
+  }
 
   const rows = snap.docs.map((d) => {
     const data = d.data() || {};
