@@ -15222,6 +15222,34 @@
         }
     }
 
+    /** HEIC / odd Storage MIME → JPEG for Cloud Vision (decode in browser when supported). */
+    function nanbanBlobToJpegDataUrlViaBitmap_(blob) {
+        if (typeof createImageBitmap !== "function") {
+            return Promise.reject(new Error("no_createImageBitmap"));
+        }
+        return createImageBitmap(blob).then(function(bmp) {
+            var w = bmp.width;
+            var h = bmp.height;
+            var maxPx = 2400;
+            var sc = Math.min(1, maxPx / Math.max(w, h, 1));
+            var cw = Math.max(1, Math.floor(w * sc));
+            var ch = Math.max(1, Math.floor(h * sc));
+            var canvas = document.createElement("canvas");
+            canvas.width = cw;
+            canvas.height = ch;
+            var ctx = canvas.getContext("2d");
+            ctx.drawImage(bmp, 0, 0, cw, ch);
+            try {
+                bmp.close();
+            } catch (eC) {}
+            var dataUrl = canvas.toDataURL("image/jpeg", 0.9);
+            if (!dataUrl || dataUrl.length < 80 || dataUrl.indexOf("data:image/jpeg") !== 0) {
+                throw new Error("bitmap_canvas_empty");
+            }
+            return dataUrl;
+        });
+    }
+
     /**
      * LLR PDF கோப்புகள் — சர்வர் OCR JPG மட்டுமே ஏற்கும். முதல் பக்கத்தை canvas-ல் வரைந்து JPEG data URL ஆக்குகிறோம்.
      */
@@ -15275,6 +15303,9 @@
             return nanbanPdfBlobToJpegDataUrl_(blob);
         }
         if (ct.startsWith("image/")) {
+            if (/heic|heif/i.test(ct)) {
+                return nanbanBlobToJpegDataUrlViaBitmap_(blob);
+            }
             return nanbanReadBlobAsDataUrl_(blob);
         }
         if (ct === "application/octet-stream" || !ct) {
@@ -15298,10 +15329,14 @@
                     if (a.length >= 4 && a[0] === 0x52 && a[1] === 0x49 && a[2] === 0x46 && a[3] === 0x46) {
                         return nanbanReadBlobAsDataUrl_(blob);
                     }
-                    return { error: "unknown" };
+                    return nanbanBlobToJpegDataUrlViaBitmap_(blob).catch(function() {
+                        return { error: "unknown" };
+                    });
                 });
         }
-        return Promise.resolve({ error: "unknown" });
+        return nanbanBlobToJpegDataUrlViaBitmap_(blob).catch(function() {
+            return Promise.resolve({ error: "unknown" });
+        });
     }
 
     /**
@@ -15534,7 +15569,9 @@
                 if (!bulk) {
                     var em = String((err && err.message) || err || "");
                     if (em.indexOf("pdf_js_missing") !== -1) failToastTamil_("pdf_js");
-                    else failToastTamil_("unknown");
+                    else if (em && em.length > 3 && em.indexOf("rpc_failed") === -1) {
+                        showToast(em.length > 220 ? em.slice(0, 220) + "…" : em, "warning");
+                    } else failToastTamil_("unknown");
                 }
             })
             .then(function() {

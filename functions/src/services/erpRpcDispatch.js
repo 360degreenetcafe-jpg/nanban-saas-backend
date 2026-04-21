@@ -783,6 +783,23 @@ function buildDailyClassWaBodyParamsFour_({ studentName, classNumberCompletedTot
   ];
 }
 
+/** When data URL says application/octet-stream but bytes are a known raster (Storage / mobile quirks). */
+function sniffImageMimeFromBuffer_(buf) {
+  if (!buf || buf.length < 4) return "";
+  const b0 = buf[0];
+  const b1 = buf[1];
+  const b2 = buf[2];
+  const b3 = buf[3];
+  if (b0 === 0xff && b1 === 0xd8) return "image/jpeg";
+  if (b0 === 0x89 && b1 === 0x50 && b2 === 0x4e && b3 === 0x47) return "image/png";
+  if (b0 === 0x47 && b1 === 0x49 && b2 === 0x46) return "image/gif";
+  if (b0 === 0x52 && b1 === 0x49 && b2 === 0x46 && b3 === 0x46 && buf.length >= 12) {
+    const t = String.fromCharCode(buf[8] || 0, buf[9] || 0, buf[10] || 0, buf[11] || 0);
+    if (t === "WEBP") return "image/webp";
+  }
+  return "";
+}
+
 function decodeDataUrlForUpload_(dataUrl) {
   const s = String(dataUrl || "");
   const i = s.indexOf(",");
@@ -6025,8 +6042,11 @@ async function handleErpRpc(action, rawArgs, authOpts) {
         if (dec.buf.length > 9 * 1024 * 1024) {
           return { status: "error", message: "Image too large (max 9 MB)" };
         }
-        const ct = String(dec.contentType || "").toLowerCase();
-        const isPdf = ct === "application/pdf" || isPdfMagicBytes_(dec.buf);
+        const ctRaw = String(dec.contentType || "").toLowerCase();
+        const isPdf = ctRaw === "application/pdf" || isPdfMagicBytes_(dec.buf);
+        const sniffed = sniffImageMimeFromBuffer_(dec.buf);
+        let mediaCt = ctRaw;
+        if (!isPdf && !mediaCt.startsWith("image/") && sniffed) mediaCt = sniffed;
         if (isPdf) {
           try {
             const parsed = await extractLlrFieldsFromPdfBuffer_(dec.buf);
@@ -6061,8 +6081,11 @@ async function handleErpRpc(action, rawArgs, authOpts) {
             };
           }
         }
-        if (!ct.startsWith("image/")) {
-          return { status: "error", message: "JPG / PNG / WebP / PDF படம் மட்டும்" };
+        if (!mediaCt.startsWith("image/")) {
+          return {
+            status: "error",
+            message: `JPG / PNG / WebP / PDF மட்டும் (கோப்பு: ${ctRaw || "?"})`
+          };
         }
         try {
           const parsed = await extractLlrFieldsFromBuffer_(dec.buf);

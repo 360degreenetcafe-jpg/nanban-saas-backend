@@ -74,7 +74,7 @@ function extractLlrNumberNearLabels_(rawText) {
   const norm = String(rawText || "").replace(/\r/g, "\n");
   const lines = norm.split("\n").map((l) => l.trim());
   const labelRe =
-    /(LLR|L\.?\s*L\.?\s*R\.?|Learner|LEARNER|Application\s*Ref|FORM\s*NO|REFERENCE|REF\.?\s*NO|DL\s*NO|D\.?L\.?\s*NO|Licen[cs]e\s*No|குறிப்பு\s*எண்|இணைப்பு|பதிவு\s*எண்)/i;
+    /(LLR|L\.?\s*L\.?\s*R\.?|Learner|LEARNER|Application\s*Ref|FORM\s*NO|REFERENCE|REF\.?\s*NO|DL\s*Number|DL\s*NO|D\.?L\.?\s*NO|D\.?L\.?\s*Number|Licen[cs]e\s*No|குறிப்பு\s*எண்|இணைப்பு|பதிவு\s*எண்)/i;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
