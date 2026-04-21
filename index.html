@@ -25543,6 +25543,11 @@
             google.script.run
                 .withSuccessHandler(function(res) {
                     if (!res || res.status !== 'success') {
+                        if (res && String(res.message || '').indexOf('Not allowed') !== -1) {
+                            try {
+                                showToast('அறிக்கை / Filing — Admin அல்லது Partner மட்டும் (Sheets).', 'danger');
+                            } catch (eT) {}
+                        }
                         setHTML('filingIndexList', `<div style="padding:12px; color:gray; font-weight:900;">No entries</div>`);
                         return;
                     }
@@ -25568,7 +25573,7 @@
                 .withFailureHandler(function() {
                     setHTML('filingIndexList', `<div style="padding:12px; color:gray; font-weight:900;">No entries</div>`);
                 })
-                .getFilingEntriesAction(mk);
+                .getFilingEntriesAction(mk, currentUserName || "");
         } catch (e) {}
     }
 
