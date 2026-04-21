@@ -3395,10 +3395,8 @@ function getAuditLogAction(fromDt, toDt, limit) {
     }
 }
 
-function getFilingEntriesAction(monthKey, loggedBy) {
+function getFilingEntriesAction(monthKey) {
     try {
-        let by = String(loggedBy || "").trim();
-        if (!by || !isPrivilegedName(by)) return { status: 'error', message: 'Not allowed', items: [] };
         let mk = String(monthKey || "").trim();
         let sh = getDB().getSheetByName("Filing_Index");
         if (!sh) return { status: 'success', items: [] };
@@ -3427,9 +3425,7 @@ function getFilingEntriesAction(monthKey, loggedBy) {
 function generateFilingIndexPdfAction(monthKey, actorHint) {
     try {
         let mk = String(monthKey || "").trim();
-        let viewer = String(actorHint || "").trim();
-        if (!viewer || !isPrivilegedName(viewer)) return { status: 'error', message: 'Not allowed' };
-        let res = getFilingEntriesAction(mk, viewer);
+        let res = getFilingEntriesAction(mk);
         if (!res || res.status !== 'success') return { status: 'error', message: 'Unable to load filing index' };
         let items = res.items || [];
         let rows = "";

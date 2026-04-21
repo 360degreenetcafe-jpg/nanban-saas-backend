@@ -25543,24 +25543,24 @@
             let mk = (fromDt && String(fromDt).length >= 7) ? String(fromDt).slice(0, 7) : "";
             if (!mk) return;
             setHTML('filingIndexList', `<div style="padding:12px; color:gray; font-weight:900;">Loading...</div>`);
-            google.script.run
-                .withSuccessHandler(function(res) {
-                    if (!res || res.status !== 'success') {
-                        if (res && String(res.message || '').indexOf('Not allowed') !== -1) {
-                            try {
-                                showToast('அறிக்கை / Filing — Admin அல்லது Partner மட்டும் (Sheets).', 'danger');
-                            } catch (eT) {}
-                        }
-                        setHTML('filingIndexList', `<div style="padding:12px; color:gray; font-weight:900;">No entries</div>`);
-                        return;
+            function applyFilingRes_(res) {
+                if (!res || res.status !== 'success') {
+                    let msg = String((res && res.message) || '').toLowerCase();
+                    if (msg.indexOf('not allowed') !== -1 || msg.indexOf('owner_or_admin') !== -1) {
+                        try {
+                            showToast('அறிக்கை / Filing — Owner அல்லது Admin அனுமதி.', 'danger');
+                        } catch (eT) {}
                     }
-                    let items = res.items || [];
-                    if (!items.length) {
-                        setHTML('filingIndexList', `<div style="padding:12px; color:gray; font-weight:900;">No entries</div>`);
-                        return;
-                    }
-                    let html = items.slice(0, 30).map(it => {
-                        return `<div class="glass-card" style="padding:14px; border-radius:16px; border:1px solid #e2e8f0; background:white;">
+                    setHTML('filingIndexList', `<div style="padding:12px; color:gray; font-weight:900;">No entries</div>`);
+                    return;
+                }
+                let items = res.items || [];
+                if (!items.length) {
+                    setHTML('filingIndexList', `<div style="padding:12px; color:gray; font-weight:900;">No entries</div>`);
+                    return;
+                }
+                let html = items.slice(0, 30).map(it => {
+                    return `<div class="glass-card" style="padding:14px; border-radius:16px; border:1px solid #e2e8f0; background:white;">
                             <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
                                 <div>
                                     <div style="font-weight:1000; color:var(--primary); font-size:13px;">${it.type || '-'}</div>
@@ -25570,13 +25570,26 @@
                             </div>
                             ${it.meta ? `<div style="margin-top:8px; font-size:10px; color:#64748b; font-weight:800; overflow-wrap:anywhere;">${it.meta}</div>` : ``}
                         </div>`;
-                    }).join('');
-                    setHTML('filingIndexList', html);
-                })
+                }).join('');
+                setHTML('filingIndexList', html);
+            }
+            if (nanbanNativeConfigured_()) {
+                apiCall_("getFilingEntriesAction", mk)
+                    .then(applyFilingRes_)
+                    .catch(function (err) {
+                        try {
+                            showToast(String((err && err.message) || err), 'danger');
+                        } catch (eT) {}
+                        setHTML('filingIndexList', `<div style="padding:12px; color:gray; font-weight:900;">No entries</div>`);
+                    });
+                return;
+            }
+            google.script.run
+                .withSuccessHandler(applyFilingRes_)
                 .withFailureHandler(function() {
                     setHTML('filingIndexList', `<div style="padding:12px; color:gray; font-weight:900;">No entries</div>`);
                 })
-                .getFilingEntriesAction(mk, currentUserName || "");
+                .getFilingEntriesAction(mk);
         } catch (e) {}
     }
 
